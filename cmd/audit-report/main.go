@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -55,13 +56,21 @@ func run(args []string) int {
 	case "help", "--help", "-h":
 		printUsage(os.Stdout)
 		return 0
-	case "--watch", "-watch":
-		// `audit-report --watch` alone (no report type) live-tails the
-		// curated security view — failures and privilege changes, the
-		// "is anything wrong right now" question a human casually running
-		// --watch is actually asking. Use `compliance --watch --raw`
-		// explicitly for the unfiltered raw firehose instead.
-		sub, rest = "security", args
+	default:
+		if strings.HasPrefix(sub, "-") {
+			// No report type given — just flags, e.g. `audit-report --watch`
+			// or `audit-report --raw`. Pick a sensible default report rather
+			// than erroring: --raw only means anything for compliance (the
+			// only report with a raw JSON column to toggle), so route there
+			// if it's present; otherwise default to security, the "is
+			// anything wrong right now" view a bare `--watch` is usually
+			// actually asking for.
+			sub = "security"
+			if wantsRaw(args) {
+				sub = "compliance"
+			}
+			rest = args
+		}
 	}
 
 	if err := runReportCommand(sub, rest); err != nil {
@@ -73,6 +82,23 @@ func run(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// wantsRaw checks for --raw/-raw among bare top-level args (before any
+// report-specific flagset has parsed them), including the explicit-value
+// forms --raw=true/-raw=false. Only used to pick a default report when none
+// was given; runReportCommand's own flagset does the real parsing.
+func wantsRaw(args []string) bool {
+	for _, a := range args {
+		switch {
+		case a == "--raw" || a == "-raw":
+			return true
+		case strings.HasPrefix(a, "--raw=") || strings.HasPrefix(a, "-raw="):
+			v := a[strings.Index(a, "=")+1:]
+			return v != "false" && v != "0"
+		}
+	}
+	return false
 }
 
 func printUsage(w io.Writer) {
@@ -98,8 +124,9 @@ Examples:
   audit-report activity --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
   audit-report security --watch --human
   audit-report compliance --user=jdoe@example.com --format=csv > export.csv
-  audit-report --watch    # shorthand for: security --watch
-  audit-report compliance --watch --raw --human   # unfiltered live firehose
+  audit-report --watch       # shorthand for: security --watch
+  audit-report --raw         # shorthand for: compliance --raw (--raw implies compliance when no command is given)
+  audit-report --watch --raw --human   # shorthand for: compliance --watch --raw --human
 
 Requires: the ingestion pipeline (postgres, tbot, event-handler, audit-sink)
 running via Docker Compose, and DATABASE_URL pointing at it — see this
