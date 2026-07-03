@@ -78,7 +78,7 @@ func printUsage(w io.Writer) {
 Flags (activity, requests, security, compliance):
   --from string       Start time, RFC3339 (default: 24h ago)
   --to string         End time, RFC3339, ignored with --watch (default: now)
-  --user string       Filter to one user (activity/compliance: actor; requests: requester)
+  --user string       Filter to one user (activity/security/compliance: actor; requests: requester)
   --format string     table, csv, or json (default: table)
   --db string         Postgres connection string (default: $DATABASE_URL)
   --watch             Poll and re-render continuously instead of running once
@@ -105,7 +105,7 @@ func runReportCommand(sub string, rest []string) error {
 	fs := flag.NewFlagSet(sub, flag.ContinueOnError)
 	from := fs.String("from", time.Now().Add(-24*time.Hour).Format(time.RFC3339), "start time (RFC3339)")
 	to := fs.String("to", time.Now().Format(time.RFC3339), "end time (RFC3339, ignored with --watch)")
-	user := fs.String("user", "", "filter to a single user (activity, compliance; requests filters by requester)")
+	user := fs.String("user", "", "filter to a single user (activity, security, compliance: actor; requests: requester)")
 	outFormat := fs.String("format", "table", "output format: table, csv, json")
 	dbURL := fs.String("db", os.Getenv("DATABASE_URL"), "Postgres connection string (default: $DATABASE_URL)")
 	watch := fs.Bool("watch", false, "poll and re-render continuously instead of running once, like the watch(1) command")

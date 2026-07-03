@@ -90,6 +90,11 @@ split and the regression tests in `requests_test.go`.
 **Use it to answer:** did anyone fail to get in, and did anyone change who
 can get in or what they can do.
 
+`--user` filters by actor here, same as `activity`/`compliance` — e.g.
+`audit-report security --user=jdoe@example.com` shows only failed auth
+attempts and privilege changes performed *by* that user (verified: an
+unmatched `--user` returns zero rows, not the unfiltered set).
+
 Two categories, handled differently:
 
 **Authentication attempts** (`user.login`, `auth`, `device.authenticate`,

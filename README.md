@@ -7,15 +7,22 @@ audit-event export mechanism.
 
 ## How it works
 
-Teleport's [Event Handler plugin](https://goteleport.com/docs/management/export-audit-events/fluentd/)
-streams audit events out of the Auth Service via gRPC and forwards them as
-JSON over mutual TLS — normally to Fluentd/Logstash for a SIEM. Here it
-forwards to **audit-sink**, a small Go service that speaks the same
-HTTPS+mTLS contract and writes events into Postgres instead. **audit-report**
-is a CLI that queries that Postgres database on demand.
+**tbot** (Teleport's Machine ID agent) joins your cluster once, using a
+single-use token, then renews its own identity indefinitely — no manual
+cert rotation. Teleport's [Event Handler plugin](https://goteleport.com/docs/management/export-audit-events/fluentd/)
+authenticates with that identity and streams audit events out of the Auth
+Service via gRPC, forwarding them as JSON over mutual TLS — normally to
+Fluentd/Logstash for a SIEM. Here it forwards to **audit-sink**, a small Go
+service that speaks the same HTTPS+mTLS contract and writes events into
+Postgres instead. **audit-report** is a CLI that queries that Postgres
+database on demand.
 
 ```
-event-handler --(gRPC)--> Teleport Auth Service
+tbot --(token join, once)--> Teleport Auth Service
+ |
+ | writes a renewable identity to a shared volume
+ v
+event-handler --(gRPC, using that identity)--> Teleport Auth Service
      |
      | HTTPS + mTLS, POST /events.log, /session.log
      v
@@ -26,9 +33,10 @@ audit-sink (Go) --> postgres
               audit-report CLI (run on demand)
 ```
 
-Everything runs as a local Docker Compose stack. Event Handler only needs
-outbound access to your Teleport proxy; it reaches `audit-sink` over the
-Compose network, so nothing needs to be exposed publicly.
+Everything runs as a local Docker Compose stack. tbot and Event Handler
+only need outbound access to your Teleport proxy; Event Handler reaches
+`audit-sink` over the Compose network, so nothing needs to be exposed
+publicly.
 
 ## Prerequisites
 
@@ -125,7 +133,7 @@ Flags across all four subcommands:
 | ------------ | ------------------------ | --------------------------------------- |
 | `--from`     | 24h ago                  | RFC3339                                 |
 | `--to`       | now                      | RFC3339, ignored with `--watch`         |
-| `--user`     | (all users)              | For `requests`, filters by requester — a request's own review/approval events by a *different* user still count, so its state is never shown incomplete |
+| `--user`     | (all users)              | Filters `activity`/`security`/`compliance` by actor. For `requests`, filters by requester instead — a request's own review/approval events by a *different* user still count, so its state is never shown incomplete |
 | `--format`   | `table`                  | `table`, `csv`, or `json`               |
 | `--db`       | `$DATABASE_URL`          | Postgres connection string              |
 | `--watch`    | off                      | Poll and re-render continuously (like `watch`) instead of running once — see below |
