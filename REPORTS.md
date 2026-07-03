@@ -114,12 +114,34 @@ tries to avoid elsewhere. The reasoning per tier (see
 Adjust the mapping in code freely if your environment's risk tolerance
 differs — it's a starting point, not a certified control mapping.
 
-Two columns worth calling out: `source` is the remote address an
-authentication attempt came from (`addr.remote` in the raw event) — present
-on `user.login` and `auth`, confirmed absent on `device.authenticate`
-(left blank there, not an error). `detail` shows the connector for
-`user.login` rows, or a resource `name` for everything else (roles, locks,
-etc.).
+Three columns worth calling out:
+
+- **`source`** is the remote address an authentication attempt came from
+  (`addr.remote` in the raw event) — present on `user.login` and `auth`,
+  confirmed absent on `device.authenticate` (left blank there, not an
+  error).
+- **`detail`** shows the connector for `user.login` rows, or a resource
+  `name` for everything else (roles, locks, etc.).
+- **`success`** is `true`/`false` when the event carries that field at all,
+  blank otherwise. It's meaningless (and left blank) on rows from
+  "privilege- and trust-affecting changes" below — a `role.created` isn't
+  "successful" or "failed", it just happened.
+
+**`actor` showing `system`, not a person:** some privilege-affecting events
+— in practice, `role.created` for the auto-generated `okta-access`,
+`aws-ic-access`, and `@teleport-access-approver` integration roles — are
+emitted by Teleport's own internal processes (plugin/access-list sync), not
+by anyone logging in and clicking something. `actor` shows exactly what the
+event's `user` field says, verbatim, and Teleport itself sets that field to
+the literal string `"system"` here (confirmed directly against the raw
+event JSON — there's no `updated_by`/`triggered_by`/similar field on these
+events to say *which* internal process, only the resulting role's name).
+This report doesn't invent a distinct `SYSTEM` severity tier for these: the
+role still grants real access, so `HIGH` is still the right call — but
+`actor = system` is itself the signal that a role-lifecycle event was
+routine automation, not something to go ask a human about. If you see
+`system` creating a role whose *name* you don't recognize, that's the part
+worth investigating, not the fact that `system` did it.
 
 Two categories, handled differently:
 
@@ -254,6 +276,17 @@ of a scrolling row list.
 Without this, answering "what happened" meant dropping into `psql` to
 `GROUP BY event_type` by hand — a real gap found while using this tool to
 investigate a real incident, not a hypothetical one.
+
+## `--from`/`--to`: time formats
+
+Both accept RFC3339 (`2026-07-01T00:00:00Z`) — the canonical form, and the
+only one `--format=json` ever emits, so it's what you'd paste back in from a
+previous run. For everyday use, also accepted: `now`, `today`/`yesterday`
+(midnight in your local timezone), and a bare duration ago like `-15m` or
+`-24h` (anything `time.ParseDuration` accepts: ns/us/ms/s/m/h — no days, use
+`-24h` instead of `-1d`). `--from=today --to=now` and `--from=-24h` both mean
+roughly the same thing; pick whichever reads clearer for the command you're
+writing.
 
 ## `--watch`: live mode vs. a point-in-time report
 

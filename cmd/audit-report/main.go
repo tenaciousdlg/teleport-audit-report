@@ -70,6 +70,11 @@ func run(args []string) int {
 				sub = "compliance"
 			}
 			rest = args
+			// Say so — running `audit-report --summary` with no command and
+			// silently getting the security report (not, say, compliance,
+			// which is what most people mean by "everything that happened")
+			// is confusing with no indication of which report actually ran.
+			fmt.Fprintf(os.Stderr, "audit-report: no command given — defaulting to %q (see 'audit-report help' for the full shorthand rule)\n", sub)
 		}
 	}
 
@@ -109,21 +114,25 @@ func printUsage(w io.Writer) {
 		fmt.Fprintf(w, "  %-11s %s\n", c.name, c.help)
 	}
 	fmt.Fprintf(w, `
-Flags (activity, requests, security, compliance):
-  --from string       Start time, RFC3339 (default: 24h ago)
-  --to string         End time, RFC3339, ignored with --watch (default: now)
-  --user string       Filter to one user (activity/security/compliance: actor; requests: requester)
-  --format string     table, csv, or json (default: table)
+Flags (activity, requests, security, compliance) — "<...>" marks a
+placeholder you replace, e.g. --from=<time> means --from=today, not the
+literal text "<time>":
+  --from=<time>       Start of the window: RFC3339, "today", "yesterday",
+                      "now", or a duration ago like "-15m"/"-24h" (default: 24h ago)
+  --to=<time>         End of the window, same formats as --from, ignored
+                      with --watch (default: now)
+  --user=<name>       Filter to one user (activity/security/compliance: actor; requests: requester)
+  --format=<fmt>      table, csv, or json (default: table)
   --human             Render timestamps in your local timezone, human-readable (table/csv only)
   --raw               compliance only: include the full raw JSON column in table output (csv/json always include it)
   --summary           Show a count-by-type breakdown instead of individual rows (by event_type, or by state for requests)
-  --db string         Postgres connection string (default: $DATABASE_URL)
+  --db=<url>          Postgres connection string (default: $DATABASE_URL)
   --watch             Poll and re-render continuously instead of running once
-  --interval duration Refresh interval when --watch is set (default: 5s)
+  --interval=<dur>    Refresh interval when --watch is set, e.g. "10s"/"1m" (default: 5s)
 
 Examples:
-  audit-report activity --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
-  audit-report security --watch --human
+  audit-report activity --from=today --to=now
+  audit-report security --from=yesterday --watch --human
   audit-report compliance --user=jdoe@example.com --format=csv > export.csv
   audit-report compliance --summary --from=2026-07-01T00:00:00Z   # what happened, at a glance
   audit-report --watch       # shorthand for: security --watch
@@ -144,8 +153,8 @@ func runReportCommand(sub string, rest []string) error {
 	}
 
 	fs := flag.NewFlagSet(sub, flag.ContinueOnError)
-	from := fs.String("from", time.Now().Add(-24*time.Hour).Format(time.RFC3339), "start time (RFC3339)")
-	to := fs.String("to", time.Now().Format(time.RFC3339), "end time (RFC3339, ignored with --watch)")
+	from := fs.String("from", time.Now().Add(-24*time.Hour).Format(time.RFC3339), `start time: RFC3339, "today", "yesterday", "now", or a duration ago like "-15m"/"-24h"`)
+	to := fs.String("to", time.Now().Format(time.RFC3339), "end time, same formats as --from (ignored with --watch)")
 	user := fs.String("user", "", "filter to a single user (activity, security, compliance: actor; requests: requester)")
 	outFormat := fs.String("format", "table", "output format: table, csv, json")
 	humanTime := fs.Bool("human", false, "render timestamps in your local timezone, human-readable (table/csv only)")
@@ -168,11 +177,11 @@ func runReportCommand(sub string, rest []string) error {
 		return err
 	}
 
-	fromTime, err := time.Parse(time.RFC3339, *from)
+	fromTime, err := parseTimeArg(*from)
 	if err != nil {
 		return fmt.Errorf("invalid --from: %w", err)
 	}
-	toTime, err := time.Parse(time.RFC3339, *to)
+	toTime, err := parseTimeArg(*to)
 	if err != nil {
 		return fmt.Errorf("invalid --to: %w", err)
 	}
@@ -255,6 +264,43 @@ func runReportCommand(sub string, rest []string) error {
 	}
 
 	return watchLoop(ctx, sub, *interval, *outFormat, *humanTime, runReport)
+}
+
+// parseTimeArg accepts RFC3339 (the canonical, unambiguous form — also what
+// --human's table/csv output round-trips back through if you copy a
+// timestamp from there) plus a few shorthands for the common case of "I just
+// want recent data," which RFC3339 alone made needlessly fiddly (see the
+// README's prior workaround: shelling out to `date -u -v-15M` just to get
+// "15 minutes ago"):
+//   - "now"
+//   - "today" / "yesterday" — midnight in the local timezone
+//   - a bare duration like "-15m" or "-24h" (must start with "-";
+//     time.ParseDuration's own unit suffixes: ns/us/ms/s/m/h) — that many
+//     "ago" from now
+func parseTimeArg(s string) (time.Time, error) {
+	switch strings.ToLower(s) {
+	case "now":
+		return time.Now(), nil
+	case "today":
+		return startOfDay(time.Now()), nil
+	case "yesterday":
+		return startOfDay(time.Now().AddDate(0, 0, -1)), nil
+	}
+	if strings.HasPrefix(s, "-") {
+		if d, err := time.ParseDuration(s); err == nil {
+			return time.Now().Add(d), nil
+		}
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return time.Time{}, fmt.Errorf(`%q is not RFC3339, "now", "today", "yesterday", or a duration like "-15m"/"-24h": %w`, s, err)
+	}
+	return t, nil
+}
+
+func startOfDay(t time.Time) time.Time {
+	y, m, d := t.Date()
+	return time.Date(y, m, d, 0, 0, 0, 0, t.Location())
 }
 
 func isReportCommand(sub string) bool {

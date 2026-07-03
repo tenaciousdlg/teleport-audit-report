@@ -141,8 +141,8 @@ Flags across all four subcommands:
 
 | Flag         | Default                  | Notes                                  |
 | ------------ | ------------------------ | --------------------------------------- |
-| `--from`     | 24h ago                  | RFC3339                                 |
-| `--to`       | now                      | RFC3339, ignored with `--watch`         |
+| `--from`     | 24h ago                  | RFC3339, `today`, `yesterday`, `now`, or a duration ago like `-15m`/`-24h` |
+| `--to`       | now                      | Same formats as `--from`, ignored with `--watch` |
 | `--user`     | (all users)              | Filters `activity`/`security`/`compliance` by actor. For `requests`, filters by requester instead — a request's own review/approval events by a *different* user still count, so its state is never shown incomplete |
 | `--format`   | `table`                  | `table`, `csv`, or `json`               |
 | `--human`    | off                      | Render timestamps in your local timezone, human-readable (`table`/`csv` only — `json` always uses RFC3339, for round-tripping) |
@@ -164,9 +164,7 @@ For a live view instead of a point-in-time report, add `--watch` and keep
 `--from` recent (each refresh re-queries and reprints the whole window):
 
 ```sh
-# --from/--to take RFC3339 timestamps, not relative durations — this is
-# "15 minutes ago" on macOS (use `date -u -d '-15 minutes'` on Linux):
-audit-report security --from=$(date -u -v-15M +%Y-%m-%dT%H:%M:%SZ) --watch
+audit-report security --from=-15m --watch
 ```
 
 ## Verifying it's actually working
