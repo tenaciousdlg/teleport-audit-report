@@ -1,0 +1,12 @@
+version: v2
+onboarding:
+  join_method: token
+  token: ${BOT_JOIN_TOKEN}
+storage:
+  type: memory
+proxy_server: ${PROXY_ADDR}
+outputs:
+  - type: identity
+    destination:
+      type: directory
+      path: /identity

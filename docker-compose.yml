@@ -1,0 +1,70 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      # Published so `audit-report` can connect from the host without
+      # needing to run inside the Compose network.
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  audit-sink:
+    build:
+      context: .
+      dockerfile: Dockerfile.sink
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: ${DATABASE_URL_INTERNAL}
+      LISTEN_ADDR: ":8443"
+      TLS_CA_PATH: /tls/ca.crt
+      TLS_CERT_PATH: /tls/server.crt
+      TLS_KEY_PATH: /tls/server.key
+    volumes:
+      # Same cert bundle generated for the Event Handler (see
+      # event-handler/README.md) — audit-sink is the "server" side that
+      # verifies the Event Handler's client cert.
+      - ./event-handler:/tls:ro
+
+  tbot:
+    image: public.ecr.aws/gravitational/tbot-distroless:${TBOT_VERSION}
+    restart: unless-stopped
+    command: ["start", "-c", "/config/tbot.yaml"]
+    volumes:
+      # See tbot/README.md to generate tbot.yaml from tbot.yaml.tmpl + .env.
+      - ./tbot/tbot.yaml:/config/tbot.yaml:ro
+      - identity-data:/identity
+
+  event-handler:
+    image: public.ecr.aws/gravitational/teleport-plugin-event-handler:${EVENT_HANDLER_VERSION}
+    restart: unless-stopped
+    depends_on:
+      - audit-sink
+      - tbot
+    working_dir: /opt/teleport-plugin
+    command: ["start", "--config=/opt/teleport-plugin/teleport-event-handler.toml"]
+    volumes:
+      # Generated once via `teleport-plugin-event-handler configure` (see
+      # event-handler/README.md): certs and teleport-event-handler.toml.
+      # Also doubles as the storage dir for the ingestion cursor, so
+      # restarts resume instead of replaying the whole window.
+      - ./event-handler:/opt/teleport-plugin
+      # Identity file tbot keeps renewed — mounted separately since tbot
+      # owns it, not the one-time `configure` output above.
+      - identity-data:/identity:ro
+
+volumes:
+  pgdata:
+  identity-data:
