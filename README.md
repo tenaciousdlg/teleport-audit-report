@@ -52,6 +52,16 @@ publicly.
   rights `tctl terraform env` itself relies on)
 - Terraform >= 1.6
 
+The `tsh`/`tctl`/Terraform requirements above are only for the one-time
+Setup below. **`audit-report` itself has no Teleport dependency at
+all** — it only talks to Postgres (check its imports: the only external
+dependency is the Postgres driver). Whether you're logged into `tsh`,
+logged out, or your session has expired makes no difference to running
+reports. The only two things that can go wrong day-to-day are a missing
+`DATABASE_URL`/`.env` and an unreachable Postgres — `audit-report` checks
+for both up front and fails with a clear, actionable message rather than a
+raw connection error (see `cmd/audit-report/main.go`'s pre-flight checks).
+
 ## Setup
 
 1. **Copy `.env.example` to `.env`** and fill in your cluster's proxy
