@@ -1,9 +1,9 @@
 # teleport-audit-report
 
-A better audit log for a Teleport cluster than the Web UI's Audit Log view
-gives you: real reporting (session/access activity, access-request workflow,
-security/anomalies, raw compliance export) backed by a queryable Postgres
-database, fed by Teleport's own supported audit-event export mechanism.
+Audit reporting for a Teleport cluster: session/access activity,
+access-request workflow, security/anomalies, and raw compliance export,
+backed by a queryable Postgres database fed by Teleport's own supported
+audit-event export mechanism.
 
 ## How it works
 
@@ -33,8 +33,11 @@ Compose network, so nothing needs to be exposed publicly.
 ## Prerequisites
 
 - Docker and Docker Compose
-- Go 1.25+ (only if building `audit-report` outside Docker; the CLI is not
-  containerized since it's meant to run on your machine)
+- Go 1.25+ — `audit-report` isn't containerized (it's meant to run on your
+  machine against the published Postgres port), so this is required, not
+  optional
+- OpenSSL — needed once during setup to decrypt a generated key (see
+  `event-handler/README.md`)
 - `tsh`/`tctl` logged into the target Teleport cluster, with a role that can
   create bots/tokens/roles (e.g. the built-in `editor` role — the same
   rights `tctl terraform env` itself relies on)
@@ -81,9 +84,13 @@ Compose network, so nothing needs to be exposed publicly.
 ## Running reports
 
 `audit-report` connects to Postgres on `localhost:5432` (published by
-Compose), so it just runs as a local binary — no need to containerize it:
+Compose), so it just runs as a local binary — no need to containerize it.
+It reads `DATABASE_URL` from your environment (or pass `--db` directly), so
+source `.env` first:
 
 ```sh
+set -a; source .env; set +a
+
 go run ./cmd/audit-report activity   --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
 go run ./cmd/audit-report requests   --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
 go run ./cmd/audit-report security   --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
@@ -96,7 +103,7 @@ Flags across all four subcommands:
 | ----------- | ------------------------ | --------------------------------------- |
 | `--from`    | 24h ago                  | RFC3339                                 |
 | `--to`      | now                      | RFC3339                                 |
-| `--user`    | (all users)              | `activity` and `compliance` only        |
+| `--user`    | (all users)              | For `requests`, filters by requester — a request's own review/approval events by a *different* user still count, so its state is never shown incomplete |
 | `--format`  | `table`                  | `table`, `csv`, or `json`               |
 | `--db`      | `$DATABASE_URL`          | Postgres connection string              |
 
@@ -106,9 +113,11 @@ Or build a binary once: `go build -o audit-report ./cmd/audit-report`.
 
 1. Generate some real events against your cluster — `tsh ssh`/`tsh login` a
    couple of times, submit and approve an access request.
-2. Confirm rows landed:
+2. Confirm rows landed (no local `psql` install needed — this runs it
+   inside the `postgres` container):
    ```sh
-   psql "$DATABASE_URL" -c "select event_type, count(*) from events group by 1 order by 2 desc;"
+   docker compose exec postgres psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" \
+     -c "select event_type, count(*) from events group by 1 order by 2 desc;"
    ```
 3. Run each report subcommand and check the output matches what you just
    did — e.g. `requests` should show the approval, `activity` the session.

@@ -30,7 +30,15 @@ type requestAgg struct {
 // -> final state) by grouping the underlying access_request.* events by
 // their request ID, since Teleport logs each transition as a separate event
 // rather than one row per request.
+//
+// f.User is applied after aggregation, not to the underlying query: a
+// request's create and review events are logged under different users (the
+// requester vs. each reviewer), so filtering the raw events by one user
+// would silently drop another user's review of the same request — making
+// an actually-approved request look stuck at PENDING.
 func Requests(ctx context.Context, pool *pgxpool.Pool, f Filter) (format.Result, error) {
+	requester := f.User
+	f.User = ""
 	f.Types = requestEventTypes
 	rows, err := queryEvents(ctx, pool, f)
 	if err != nil {
@@ -92,6 +100,9 @@ func Requests(ctx context.Context, pool *pgxpool.Pool, f Filter) (format.Result,
 	res := format.Result{Columns: []string{"request_id", "user", "roles", "created", "state", "reviewers", "time_to_decision"}}
 	for _, id := range order {
 		agg := byID[id]
+		if requester != "" && agg.user != requester {
+			continue
+		}
 		ttd := ""
 		if agg.decided != nil && !agg.created.IsZero() {
 			ttd = agg.decided.Sub(agg.created).String()
