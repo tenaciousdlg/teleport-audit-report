@@ -54,6 +54,11 @@ func run(args []string) int {
 	case "help", "--help", "-h":
 		printUsage(os.Stdout)
 		return 0
+	case "--watch", "-watch":
+		// `audit-report --watch` alone (no report type) live-tails
+		// everything via compliance, which has no event-type filter —
+		// the closest thing to "just show me what's happening."
+		sub, rest = "compliance", args
 	}
 
 	if err := runReportCommand(sub, rest); err != nil {
@@ -80,14 +85,16 @@ Flags (activity, requests, security, compliance):
   --to string         End time, RFC3339, ignored with --watch (default: now)
   --user string       Filter to one user (activity/security/compliance: actor; requests: requester)
   --format string     table, csv, or json (default: table)
+  --human             Render timestamps in your local timezone, human-readable (table/csv only)
   --db string         Postgres connection string (default: $DATABASE_URL)
   --watch             Poll and re-render continuously instead of running once
   --interval duration Refresh interval when --watch is set (default: 5s)
 
 Examples:
   audit-report activity --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
-  audit-report security --watch
+  audit-report security --watch --human
   audit-report compliance --user=jdoe@example.com --format=csv > export.csv
+  audit-report --watch    # shorthand for: compliance --watch
 
 Requires: the ingestion pipeline (postgres, tbot, event-handler, audit-sink)
 running via Docker Compose, and DATABASE_URL pointing at it — see this
@@ -107,6 +114,7 @@ func runReportCommand(sub string, rest []string) error {
 	to := fs.String("to", time.Now().Format(time.RFC3339), "end time (RFC3339, ignored with --watch)")
 	user := fs.String("user", "", "filter to a single user (activity, security, compliance: actor; requests: requester)")
 	outFormat := fs.String("format", "table", "output format: table, csv, json")
+	humanTime := fs.Bool("human", false, "render timestamps in your local timezone, human-readable (table/csv only)")
 	dbURL := fs.String("db", os.Getenv("DATABASE_URL"), "Postgres connection string (default: $DATABASE_URL)")
 	watch := fs.Bool("watch", false, "poll and re-render continuously instead of running once, like the watch(1) command")
 	interval := fs.Duration("interval", 5*time.Second, "how often to refresh when --watch is set")
@@ -182,10 +190,10 @@ func runReportCommand(sub string, rest []string) error {
 		if err != nil {
 			return fmt.Errorf("run %s report: %w", sub, err)
 		}
-		return format.Write(os.Stdout, *outFormat, res)
+		return format.Write(os.Stdout, *outFormat, res, *humanTime)
 	}
 
-	return watchLoop(ctx, sub, *interval, *outFormat, runReport)
+	return watchLoop(ctx, sub, *interval, *outFormat, *humanTime, runReport)
 }
 
 func isReportCommand(sub string) bool {
@@ -197,6 +205,21 @@ func isReportCommand(sub string) bool {
 	}
 }
 
+// Enter/exit the terminal's alternate screen buffer — the same mechanism
+// `less`, `vim`, `htop`, and the watch(1) command itself use. Redrawing
+// with just "move cursor home + clear screen" (\033[H\033[2J) is not
+// reliable across terminals: some interpret \033[2J as clearing only the
+// current viewport without resetting scroll position, so each tick's
+// output gets appended below the "cleared" content instead of overwriting
+// it. The alternate screen buffer is a genuinely separate canvas — clearing
+// it is unambiguous, and leaving it restores the user's prior terminal
+// content exactly as it was, like closing `less`.
+const (
+	enterAltScreen  = "\033[?1049h"
+	exitAltScreen   = "\033[?1049l"
+	cursorHomeClear = "\033[H\033[2J"
+)
+
 // watchLoop re-runs the report on a fixed interval against a continuously
 // advancing "to" (always now), fully re-rendering each time rather than
 // diffing against the previous output. That makes it robust against
@@ -204,7 +227,10 @@ func isReportCommand(sub string) bool {
 // next tick just recomputes ground truth from the database — at the cost of
 // re-querying the whole window every tick. Keep --from recent when using
 // --watch so each refresh stays a reasonable size.
-func watchLoop(ctx context.Context, sub string, interval time.Duration, outFormat string, runReport func(context.Context, time.Time) (format.Result, error)) error {
+func watchLoop(ctx context.Context, sub string, interval time.Duration, outFormat string, humanTime bool, runReport func(context.Context, time.Time) (format.Result, error)) error {
+	fmt.Print(enterAltScreen)
+	defer fmt.Print(exitAltScreen)
+
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -213,9 +239,9 @@ func watchLoop(ctx context.Context, sub string, interval time.Duration, outForma
 		if err != nil {
 			return fmt.Errorf("run %s report: %w", sub, err)
 		}
-		fmt.Print("\033[H\033[2J")
-		fmt.Printf("%s report — updated %s (refreshing every %s, Ctrl+C to stop)\n\n", sub, time.Now().Format(time.RFC3339), interval)
-		if err := format.Write(os.Stdout, outFormat, res); err != nil {
+		fmt.Print(cursorHomeClear)
+		fmt.Printf("%s report — updated %s (refreshing every %s, Ctrl+C to stop)\n\n", sub, watchTimestamp(humanTime), interval)
+		if err := format.Write(os.Stdout, outFormat, res, humanTime); err != nil {
 			return err
 		}
 
@@ -225,4 +251,12 @@ func watchLoop(ctx context.Context, sub string, interval time.Duration, outForma
 		case <-ticker.C:
 		}
 	}
+}
+
+func watchTimestamp(human bool) string {
+	now := time.Now()
+	if human {
+		return now.Local().Format("2006-01-02 15:04:05 MST")
+	}
+	return now.Format(time.RFC3339)
 }

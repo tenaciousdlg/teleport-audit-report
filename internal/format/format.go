@@ -21,12 +21,22 @@ type Result struct {
 	Rows    [][]any
 }
 
-func Write(w io.Writer, format string, res Result) error {
+// humanTimeLayout drops the RFC3339 "T" separator and numeric offset in
+// favor of a space and a local zone abbreviation, and converts to the
+// caller's local timezone — meant for a human looking at a terminal, not
+// a machine parsing output. Kept sortable (still YYYY-MM-DD HH:MM:SS) by
+// design.
+const humanTimeLayout = "2006-01-02 15:04:05 MST"
+
+// Write renders res in the given format. humanTime only affects table and
+// csv — json always uses RFC3339 (via time.Time's native MarshalJSON) since
+// it's meant for machine consumption/round-tripping, not reading.
+func Write(w io.Writer, format string, res Result, humanTime bool) error {
 	switch format {
 	case "", "table":
-		return writeTable(w, res)
+		return writeTable(w, res, humanTime)
 	case "csv":
-		return writeCSV(w, res)
+		return writeCSV(w, res, humanTime)
 	case "json":
 		return writeJSON(w, res)
 	default:
@@ -34,20 +44,20 @@ func Write(w io.Writer, format string, res Result) error {
 	}
 }
 
-func writeTable(w io.Writer, res Result) error {
+func writeTable(w io.Writer, res Result, humanTime bool) error {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, strings.Join(res.Columns, "\t"))
 	for _, row := range res.Rows {
 		cells := make([]string, len(row))
 		for i, v := range row {
-			cells[i] = stringify(v)
+			cells[i] = stringify(v, humanTime)
 		}
 		fmt.Fprintln(tw, strings.Join(cells, "\t"))
 	}
 	return tw.Flush()
 }
 
-func writeCSV(w io.Writer, res Result) error {
+func writeCSV(w io.Writer, res Result, humanTime bool) error {
 	cw := csv.NewWriter(w)
 	if err := cw.Write(res.Columns); err != nil {
 		return err
@@ -55,7 +65,7 @@ func writeCSV(w io.Writer, res Result) error {
 	for _, row := range res.Rows {
 		cells := make([]string, len(row))
 		for i, v := range row {
-			cells[i] = stringify(v)
+			cells[i] = stringify(v, humanTime)
 		}
 		if err := cw.Write(cells); err != nil {
 			return err
@@ -81,12 +91,15 @@ func writeJSON(w io.Writer, res Result) error {
 	return enc.Encode(objs)
 }
 
-func stringify(v any) string {
+func stringify(v any, humanTime bool) string {
 	if v == nil {
 		return ""
 	}
 	switch b := v.(type) {
 	case time.Time:
+		if humanTime {
+			return b.Local().Format(humanTimeLayout)
+		}
 		return b.Format(time.RFC3339)
 	case json.RawMessage:
 		return string(b)

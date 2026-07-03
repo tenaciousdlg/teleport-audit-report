@@ -23,7 +23,7 @@ func sampleResult() Result {
 
 func TestWriteTable(t *testing.T) {
 	var buf bytes.Buffer
-	if err := Write(&buf, "table", sampleResult()); err != nil {
+	if err := Write(&buf, "table", sampleResult(), false); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	out := buf.String()
@@ -34,13 +34,27 @@ func TestWriteTable(t *testing.T) {
 		t.Errorf("table output missing row data: %q", out)
 	}
 	if !strings.Contains(out, "2026-07-03T12:00:00Z") {
-		t.Errorf("table output should format time.Time as RFC3339: %q", out)
+		t.Errorf("table output should format time.Time as RFC3339 when humanTime is false: %q", out)
+	}
+}
+
+func TestWriteTableHumanTime(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, "table", sampleResult(), true); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	out := buf.String()
+	if strings.Contains(out, "2026-07-03T12:00:00Z") {
+		t.Errorf("humanTime=true should not leave RFC3339 'T' separator/Z in output: %q", out)
+	}
+	if !strings.Contains(out, "2026-07-03") {
+		t.Errorf("humanTime output should still contain the date: %q", out)
 	}
 }
 
 func TestWriteTableDefaultsToEmptyFormat(t *testing.T) {
 	var buf bytes.Buffer
-	if err := Write(&buf, "", sampleResult()); err != nil {
+	if err := Write(&buf, "", sampleResult(), false); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	if buf.Len() == 0 {
@@ -50,7 +64,7 @@ func TestWriteTableDefaultsToEmptyFormat(t *testing.T) {
 
 func TestWriteCSV(t *testing.T) {
 	var buf bytes.Buffer
-	if err := Write(&buf, "csv", sampleResult()); err != nil {
+	if err := Write(&buf, "csv", sampleResult(), false); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
@@ -64,7 +78,7 @@ func TestWriteCSV(t *testing.T) {
 
 func TestWriteJSONEmbedsRawMessageAsStructuredJSON(t *testing.T) {
 	var buf bytes.Buffer
-	if err := Write(&buf, "json", sampleResult()); err != nil {
+	if err := Write(&buf, "json", sampleResult(), false); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -88,9 +102,19 @@ func TestWriteJSONEmbedsRawMessageAsStructuredJSON(t *testing.T) {
 	}
 }
 
+func TestWriteJSONIgnoresHumanTime(t *testing.T) {
+	var buf bytes.Buffer
+	if err := Write(&buf, "json", sampleResult(), true); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if !strings.Contains(buf.String(), "2026-07-03T12:00:00Z") {
+		t.Errorf("json output should always use RFC3339 regardless of humanTime: %q", buf.String())
+	}
+}
+
 func TestWriteUnknownFormat(t *testing.T) {
 	var buf bytes.Buffer
-	err := Write(&buf, "xml", sampleResult())
+	err := Write(&buf, "xml", sampleResult(), false)
 	if err == nil {
 		t.Fatal("expected an error for an unknown format")
 	}
@@ -107,7 +131,7 @@ func TestStringifyNilAndBool(t *testing.T) {
 		{"plain", "plain"},
 	}
 	for _, c := range cases {
-		if got := stringify(c.in); got != c.want {
+		if got := stringify(c.in, false); got != c.want {
 			t.Errorf("stringify(%v) = %q, want %q", c.in, got, c.want)
 		}
 	}

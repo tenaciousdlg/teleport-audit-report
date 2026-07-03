@@ -168,12 +168,22 @@ what already did:
   just submitted, to see the moment it's reviewed
 - `audit-report activity --watch` to eyeball who's actively on the cluster
   right now
+- `audit-report --watch` (no report type) to live-tail *everything*,
+  unfiltered — shorthand for `compliance --watch`
 
 It re-queries and fully reprints the whole window every tick rather than
 diffing/tailing individual events — deliberately, for robustness (see
 `watchLoop`'s doc comment in `cmd/audit-report/main.go` for the tradeoff
 against Postgres `LISTEN`/`NOTIFY`). Keep `--from` recent when watching so
 each refresh stays a reasonable size.
+
+Redraws happen in the terminal's alternate screen buffer (the same
+mechanism `less`/`vim`/`htop`/`watch(1)` use), so each tick replaces the
+previous one in place instead of scrolling your terminal history — and
+exiting with Ctrl+C restores whatever was on screen before you ran the
+command. Add `--human` to render each refresh's timestamps in your local
+timezone instead of RFC3339 — reading `2026-07-03 12:53:57 CDT` while
+watching something live beats `2026-07-03T12:53:57-05:00`.
 
 ## Sources
 
