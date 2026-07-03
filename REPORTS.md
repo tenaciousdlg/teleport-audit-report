@@ -95,6 +95,25 @@ can get in or what they can do.
 attempts and privilege changes performed *by* that user (verified: an
 unmatched `--user` returns zero rows, not the unfiltered set).
 
+Every row also gets a `severity`: `CRITICAL`/`HIGH`/`MEDIUM`/`LOW`/`INFO`.
+**This is this tool's own judgment call, not a mapping to a named external
+framework** (NIST 800-53, CIS Controls, MITRE ATT&CK) — there's no single
+authoritative source for "how severe is a `role.created` event," and
+claiming one would be exactly the kind of unverified assertion this doc
+tries to avoid elsewhere. The reasoning per tier (see
+`eventSeverity` in `internal/report/security.go` for the full mapping):
+
+| Severity | Examples | Why |
+| -------- | -------- | --- |
+| `CRITICAL` | `auth_preference.update`, `cert_auth_override.*` | Cluster-wide auth policy or CA trust changes — the largest blast radius this report can surface |
+| `HIGH` | `role.*`, `recovery_code.*`, `trusted_cluster.*`, SSO connector CRUD, failed `mfa_auth_challenge.validate` | Directly expands/alters who can do what, or a plausible MFA-bypass signal (failing 2FA *after* primary auth succeeded is a stronger signal than routine login friction) |
+| `MEDIUM` | Failed `device.authenticate(.confirm)`, `lock.deleted`, `user.create/delete`, `join_token.create`, `bot.*`, `access_list.*` | Usually routine operational activity, but worth tracking |
+| `LOW` | Failed `user.login`, `auth` | Routine RBAC/authn friction — people trying things they don't have access to yet, or mistyped credentials/expired sessions |
+| `INFO` | `lock.created`, anything unmapped | A defensive action the system itself took (the notable event is whatever triggered the lock, not the lock), or a type this tool doesn't have an opinion on yet |
+
+Adjust the mapping in code freely if your environment's risk tolerance
+differs — it's a starting point, not a certified control mapping.
+
 Two categories, handled differently:
 
 **Authentication attempts** (`user.login`, `auth`, `device.authenticate`,
