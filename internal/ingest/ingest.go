@@ -20,12 +20,12 @@ import (
 // under `identity.user` — verified against real events from this cluster,
 // not assumed from the docs.
 type event struct {
-	UID         string          `json:"uid"`
-	Event       string          `json:"event"`
-	Code        string          `json:"code"`
-	Time        time.Time       `json:"time"`
-	ClusterName string          `json:"cluster_name"`
-	User        string          `json:"user"`
+	UID         string    `json:"uid"`
+	Event       string    `json:"event"`
+	Code        string    `json:"code"`
+	Time        time.Time `json:"time"`
+	ClusterName string    `json:"cluster_name"`
+	User        string    `json:"user"`
 	Identity    struct {
 		User string `json:"user"`
 	} `json:"identity"`

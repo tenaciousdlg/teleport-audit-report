@@ -45,6 +45,14 @@ func Requests(ctx context.Context, pool *pgxpool.Pool, f Filter) (format.Result,
 		return format.Result{}, err
 	}
 
+	order, byID := aggregateRequests(rows)
+	return buildRequestsResult(order, byID, requester), nil
+}
+
+// aggregateRequests groups access_request.* events by request ID and folds
+// each group's events into a single lifecycle summary. Split out from
+// Requests so it can be tested with synthetic EventRows, no database needed.
+func aggregateRequests(rows []EventRow) ([]string, map[string]*requestAgg) {
 	order := []string{}
 	byID := map[string]*requestAgg{}
 	for _, e := range rows {
@@ -96,7 +104,12 @@ func Requests(ctx context.Context, pool *pgxpool.Pool, f Filter) (format.Result,
 			agg.state = "DELETED"
 		}
 	}
+	return order, byID
+}
 
+// buildRequestsResult filters the aggregated requests by requester (if set)
+// and renders them into the report's tabular shape.
+func buildRequestsResult(order []string, byID map[string]*requestAgg, requester string) format.Result {
 	res := format.Result{Columns: []string{"request_id", "user", "roles", "created", "state", "reviewers", "time_to_decision"}}
 	for _, id := range order {
 		agg := byID[id]
@@ -109,5 +122,5 @@ func Requests(ctx context.Context, pool *pgxpool.Pool, f Filter) (format.Result,
 		}
 		res.Rows = append(res.Rows, []any{id, agg.user, agg.roles, agg.created, agg.state, strings.Join(agg.reviewers, ","), ttd})
 	}
-	return res, nil
+	return res
 }

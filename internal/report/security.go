@@ -38,7 +38,14 @@ func Security(ctx context.Context, pool *pgxpool.Pool, f Filter) (format.Result,
 	if err != nil {
 		return format.Result{}, err
 	}
+	return filterSecurityRows(rows), nil
+}
 
+// filterSecurityRows drops successful authentication attempts (normal
+// activity, not worth surfacing here) and renders everything else. Split
+// out from Security so it's testable with synthetic EventRows, no database
+// needed.
+func filterSecurityRows(rows []EventRow) format.Result {
 	res := format.Result{Columns: []string{"time", "event_type", "actor", "detail", "success"}}
 	for _, e := range rows {
 		if authAttemptTypes[e.Type] && (e.Success == nil || *e.Success) {
@@ -51,7 +58,7 @@ func Security(ctx context.Context, pool *pgxpool.Pool, f Filter) (format.Result,
 		}
 		res.Rows = append(res.Rows, []any{e.Time, e.Type, e.User, detail, success})
 	}
-	return res, nil
+	return res
 }
 
 func boolString(b bool) string {
