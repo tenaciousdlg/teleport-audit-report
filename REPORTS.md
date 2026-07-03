@@ -35,6 +35,19 @@ similar). These are forensic, per-command/per-syscall/per-query detail —
 including them would make a routine session look far noisier than it is.
 They're still available, unfiltered, via `compliance`.
 
+**`resource`** is *what* was accessed, distinct from `session_id` (which
+only identifies the session, not its target). Exactly one of these is
+populated per row, tried in this order: `server_hostname` (SSH/Kubernetes
+exec sessions), `db_service` (database sessions), `app_name` (application
+sessions — also covers `mcp.session.*` rows, since Teleport models MCP
+servers as application resources sharing the same metadata),
+`kubernetes_cluster` (`kube.request`), `desktop_name` (Windows desktop
+sessions). All five are cited against
+`api/proto/teleport/legacy/types/events/events.proto`; this cluster's own
+captured events so far only exercise `server_hostname` and `app_name` —
+the other three are verified against the proto, not independently observed
+here yet.
+
 **Duration** is computed by subtracting `session_start` from
 `session_stop` on the session's end event. This only works for
 `session.end`, `db.session.end`, and `windows.desktop.session.end` —
@@ -261,6 +274,14 @@ The full raw JSON payload is always included in `csv`/`json` output — that
 completeness is the point of exporting. It's *not* included in the default
 `table` output, since a single-line JSON blob per row is unreadable in a
 terminal; pass `--raw` to include it there too.
+
+**`--raw` and `--human` combine, but only one of them touches the raw
+column.** `--human` reformats this tool's own `time` column; it never
+rewrites anything inside the raw JSON blob, which is deliberately verbatim
+— Teleport's own timestamp fields inside it stay in their original RFC3339
+form either way. `audit-report --watch --raw --human` is genuinely useful
+(human-readable `time` at a glance, unmodified raw JSON alongside it for
+copy-paste into another tool) — it's not two flags fighting each other.
 
 ## `--summary`: what happened, at a glance
 

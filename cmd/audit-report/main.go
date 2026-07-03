@@ -123,7 +123,10 @@ literal text "<time>":
                       with --watch (default: now)
   --user=<name>       Filter to one user (activity/security/compliance: actor; requests: requester)
   --format=<fmt>      table, csv, or json (default: table)
-  --human             Render timestamps in your local timezone, human-readable (table/csv only)
+  --human             Render this tool's own "time" column in your local
+                      timezone, human-readable (table/csv only). Only that
+                      column — with --raw, the raw JSON blob still carries
+                      Teleport's own original timestamp fields untouched.
   --raw               compliance only: include the full raw JSON column in table output (csv/json always include it)
   --summary           Show a count-by-type breakdown instead of individual rows (by event_type, or by state for requests)
   --db=<url>          Postgres connection string (default: $DATABASE_URL)
@@ -255,15 +258,30 @@ func runReportCommand(sub string, rest []string) error {
 		}
 	}
 
+	// security's severity/detail/success columns aren't self-explanatory —
+	// found via direct user feedback after shipping them undocumented in the
+	// CLI itself (REPORTS.md had the explanation, but nobody reads a doc
+	// mid-incident). Only for the columns that exist: --summary collapses
+	// to event_type/count, and csv/json are for piping/parsing, where an
+	// extra text line would corrupt the output.
+	legend := ""
+	if sub == "security" && *outFormat == "table" && !*summary {
+		legend = "severity is this tool's own risk judgment, not a named external framework; " +
+			"detail = login connector or resource name; success is blank when an event has " +
+			"no meaningful success/failure split (e.g. role/user lifecycle changes). Full " +
+			"reasoning: REPORTS.md.\n\n"
+	}
+
 	if !*watch {
 		res, err := runReport(ctx, toTime)
 		if err != nil {
 			return fmt.Errorf("run %s report: %w", sub, err)
 		}
+		fmt.Print(legend)
 		return format.Write(os.Stdout, *outFormat, res, *humanTime)
 	}
 
-	return watchLoop(ctx, sub, *interval, *outFormat, *humanTime, runReport)
+	return watchLoop(ctx, sub, *interval, *outFormat, *humanTime, legend, runReport)
 }
 
 // parseTimeArg accepts RFC3339 (the canonical, unambiguous form — also what
@@ -351,7 +369,7 @@ func runStty(arg string) error {
 // next tick just recomputes ground truth from the database — at the cost of
 // re-querying the whole window every tick. Keep --from recent when using
 // --watch so each refresh stays a reasonable size.
-func watchLoop(ctx context.Context, sub string, interval time.Duration, outFormat string, humanTime bool, runReport func(context.Context, time.Time) (format.Result, error)) error {
+func watchLoop(ctx context.Context, sub string, interval time.Duration, outFormat string, humanTime bool, legend string, runReport func(context.Context, time.Time) (format.Result, error)) error {
 	fmt.Print(enterAltScreen)
 	defer fmt.Print(exitAltScreen)
 
@@ -373,6 +391,7 @@ func watchLoop(ctx context.Context, sub string, interval time.Duration, outForma
 		}
 		fmt.Print(cursorHomeClear)
 		fmt.Printf("%s report — updated %s (refreshing every %s, Ctrl+C to stop)\n\n", sub, watchTimestamp(humanTime), interval)
+		fmt.Print(legend)
 		if err := format.Write(os.Stdout, outFormat, res, humanTime); err != nil {
 			return err
 		}
