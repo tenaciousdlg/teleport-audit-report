@@ -147,11 +147,16 @@ triggers — the same shape of signal this report curates.
 ## `compliance` — raw, filtered export
 
 **Use it to answer:** "give me everything for this time range/user" — no
-curation, no event-type filter, just the full JSON payload alongside the
-common indexed fields. This is the "hand it to an auditor" report, and also
-the fallback for anything the other three reports intentionally leave out
-(enhanced session recording detail, per-statement query capture, event
-types not yet covered by this tool at all).
+curation, no event-type filter, alongside the common indexed fields. This
+is the "hand it to an auditor" report, and also the fallback for anything
+the other three reports intentionally leave out (enhanced session
+recording detail, per-statement query capture, event types not yet covered
+by this tool at all).
+
+The full raw JSON payload is always included in `csv`/`json` output — that
+completeness is the point of exporting. It's *not* included in the default
+`table` output, since a single-line JSON blob per row is unreadable in a
+terminal; pass `--raw` to include it there too.
 
 ## `--watch`: live mode vs. a point-in-time report
 
@@ -168,8 +173,11 @@ what already did:
   just submitted, to see the moment it's reviewed
 - `audit-report activity --watch` to eyeball who's actively on the cluster
   right now
-- `audit-report --watch` (no report type) to live-tail *everything*,
-  unfiltered — shorthand for `compliance --watch`
+- `audit-report --watch` (no report type) as a default live dashboard —
+  shorthand for `audit-report security --watch`, since "is anything wrong
+  right now" is usually the actual question behind casually running
+  `--watch`. For an unfiltered live firehose of every event instead, use
+  `audit-report compliance --watch --raw`.
 
 It re-queries and fully reprints the whole window every tick rather than
 diffing/tailing individual events — deliberately, for robustness (see
@@ -181,8 +189,12 @@ Redraws happen in the terminal's alternate screen buffer (the same
 mechanism `less`/`vim`/`htop`/`watch(1)` use), so each tick replaces the
 previous one in place instead of scrolling your terminal history — and
 exiting with Ctrl+C restores whatever was on screen before you ran the
-command. Add `--human` to render each refresh's timestamps in your local
-timezone instead of RFC3339 — reading `2026-07-03 12:53:57 CDT` while
+command. Local terminal echo is also suppressed (best-effort) while
+watching, so pressing a key that doesn't do anything — e.g. arrow keys,
+which don't scroll in the alternate screen — doesn't leave raw escape
+sequences visible until the next redraw. Add `--human` to render each
+refresh's timestamps in your local timezone instead of RFC3339 — reading
+`2026-07-03 12:53:57 CDT` while
 watching something live beats `2026-07-03T12:53:57-05:00`.
 
 ## Sources

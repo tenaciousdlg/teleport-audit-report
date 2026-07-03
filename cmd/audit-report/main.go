@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 	"time"
@@ -55,10 +56,12 @@ func run(args []string) int {
 		printUsage(os.Stdout)
 		return 0
 	case "--watch", "-watch":
-		// `audit-report --watch` alone (no report type) live-tails
-		// everything via compliance, which has no event-type filter —
-		// the closest thing to "just show me what's happening."
-		sub, rest = "compliance", args
+		// `audit-report --watch` alone (no report type) live-tails the
+		// curated security view — failures and privilege changes, the
+		// "is anything wrong right now" question a human casually running
+		// --watch is actually asking. Use `compliance --watch --raw`
+		// explicitly for the unfiltered raw firehose instead.
+		sub, rest = "security", args
 	}
 
 	if err := runReportCommand(sub, rest); err != nil {
@@ -86,6 +89,7 @@ Flags (activity, requests, security, compliance):
   --user string       Filter to one user (activity/security/compliance: actor; requests: requester)
   --format string     table, csv, or json (default: table)
   --human             Render timestamps in your local timezone, human-readable (table/csv only)
+  --raw               compliance only: include the full raw JSON column in table output (csv/json always include it)
   --db string         Postgres connection string (default: $DATABASE_URL)
   --watch             Poll and re-render continuously instead of running once
   --interval duration Refresh interval when --watch is set (default: 5s)
@@ -94,7 +98,8 @@ Examples:
   audit-report activity --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
   audit-report security --watch --human
   audit-report compliance --user=jdoe@example.com --format=csv > export.csv
-  audit-report --watch    # shorthand for: compliance --watch
+  audit-report --watch    # shorthand for: security --watch
+  audit-report compliance --watch --raw --human   # unfiltered live firehose
 
 Requires: the ingestion pipeline (postgres, tbot, event-handler, audit-sink)
 running via Docker Compose, and DATABASE_URL pointing at it — see this
@@ -115,6 +120,7 @@ func runReportCommand(sub string, rest []string) error {
 	user := fs.String("user", "", "filter to a single user (activity, security, compliance: actor; requests: requester)")
 	outFormat := fs.String("format", "table", "output format: table, csv, json")
 	humanTime := fs.Bool("human", false, "render timestamps in your local timezone, human-readable (table/csv only)")
+	rawColumn := fs.Bool("raw", false, "compliance only: include the full raw JSON column in table output (csv/json always include it)")
 	dbURL := fs.String("db", os.Getenv("DATABASE_URL"), "Postgres connection string (default: $DATABASE_URL)")
 	watch := fs.Bool("watch", false, "poll and re-render continuously instead of running once, like the watch(1) command")
 	interval := fs.Duration("interval", 5*time.Second, "how often to refresh when --watch is set")
@@ -179,7 +185,12 @@ func runReportCommand(sub string, rest []string) error {
 		case "security":
 			return report.Security(ctx, pool, filter)
 		case "compliance":
-			return report.Compliance(ctx, pool, filter)
+			// csv/json are for export/processing, where completeness is
+			// the point — always include raw there. table is for reading
+			// in a terminal, where a giant single-line JSON blob per row
+			// isn't; only include it there on explicit request (--raw).
+			includeRaw := *rawColumn || *outFormat != "table"
+			return report.Compliance(ctx, pool, filter, includeRaw)
 		default:
 			return format.Result{}, fmt.Errorf("unknown report %q", sub)
 		}
@@ -220,6 +231,23 @@ const (
 	cursorHomeClear = "\033[H\033[2J"
 )
 
+// suppressEcho best-effort disables local terminal echo and returns a
+// function to restore it. If stdin isn't a real terminal (piped, redirected,
+// no `stty` available), the stty invocation just fails and this is a
+// silent no-op — watch mode doesn't depend on it working.
+func suppressEcho() func() {
+	if err := runStty("-echo"); err != nil {
+		return func() {}
+	}
+	return func() { _ = runStty("echo") }
+}
+
+func runStty(arg string) error {
+	cmd := exec.Command("stty", arg)
+	cmd.Stdin = os.Stdin
+	return cmd.Run()
+}
+
 // watchLoop re-runs the report on a fixed interval against a continuously
 // advancing "to" (always now), fully re-rendering each time rather than
 // diffing against the previous output. That makes it robust against
@@ -230,6 +258,14 @@ const (
 func watchLoop(ctx context.Context, sub string, interval time.Duration, outFormat string, humanTime bool, runReport func(context.Context, time.Time) (format.Result, error)) error {
 	fmt.Print(enterAltScreen)
 	defer fmt.Print(exitAltScreen)
+
+	// Watch mode doesn't read stdin at all — e.g. arrow keys pressed while
+	// trying to scroll (scrolling isn't supported in the alternate screen,
+	// same as in less/vim/htop) would otherwise just sit unread and get
+	// locally echoed by the terminal as raw escape bytes until the next
+	// redraw. Best-effort only: if stdin isn't a real terminal, this is a
+	// silent no-op and watch mode still works.
+	defer suppressEcho()()
 
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

@@ -146,12 +146,15 @@ Flags across all four subcommands:
 | `--user`     | (all users)              | Filters `activity`/`security`/`compliance` by actor. For `requests`, filters by requester instead — a request's own review/approval events by a *different* user still count, so its state is never shown incomplete |
 | `--format`   | `table`                  | `table`, `csv`, or `json`               |
 | `--human`    | off                      | Render timestamps in your local timezone, human-readable (`table`/`csv` only — `json` always uses RFC3339, for round-tripping) |
+| `--raw`      | off                      | `compliance` only: include the full raw JSON column in `table` output. `csv`/`json` always include it — a single-line JSON blob per row is unreadable in a terminal table, but that's the whole point of exporting to csv/json |
 | `--db`       | `$DATABASE_URL`          | Postgres connection string              |
 | `--watch`    | off                      | Poll and re-render continuously (like `watch`) instead of running once — see below |
 | `--interval` | `5s`                     | Refresh interval when `--watch` is set  |
 
 `audit-report --watch` with no report type is shorthand for `audit-report
-compliance --watch` — live-tail every event, unfiltered.
+security --watch` — the "is anything wrong right now" question a live-tail
+is usually actually asking. For an unfiltered live firehose instead, use
+`audit-report compliance --watch --raw`.
 
 For a live view instead of a point-in-time report, add `--watch` and keep
 `--from` recent (each refresh re-queries and reprints the whole window):
