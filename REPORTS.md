@@ -270,6 +270,20 @@ the other three reports intentionally leave out (enhanced session
 recording detail, per-statement query capture, event types not yet covered
 by this tool at all).
 
+Two columns beyond the raw event fields: **`detail`** surfaces one
+"what happened" field per row — role/lock name, login connector,
+`cert.create`'s `cert_type`, `bot.join`'s `method`, or (falling back to)
+the same resource fields `activity` uses — same idea as `security`'s
+`detail` column, generalized since compliance has no fixed type list to
+special-case. **`user`** falls back to the raw event's `user_name` field
+when empty: `bot.join` events carry the joining bot's identity under a
+top-level `user_name` key that `internal/ingest`'s actor extraction doesn't
+check (it only looks at `user`/`identity.user`), so every `bot.join` row
+showed a blank actor until this fallback — found directly from real
+`compliance` output, not assumed. It's applied at query time, in
+`internal/report/compliance.go`, so it recovers rows already ingested
+before the fix, not just future ones.
+
 The full raw JSON payload is always included in `csv`/`json` output — that
 completeness is the point of exporting. It's *not* included in the default
 `table` output, since a single-line JSON blob per row is unreadable in a
