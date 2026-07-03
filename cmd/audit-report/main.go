@@ -4,6 +4,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -16,6 +17,12 @@ import (
 	"github.com/tenaciousdlg/teleport-audit-report/internal/report"
 )
 
+// version is set at build time via -ldflags "-X main.version=...";
+// goreleaser injects the tag. Defaults to "dev" for `go run`/`go build`.
+var version = "dev"
+
+const usage = "usage: audit-report <activity|requests|security|compliance|version> [flags]"
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "audit-report:", err)
@@ -25,9 +32,18 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: audit-report <activity|requests|security|compliance> [flags]")
+		return errors.New(usage)
 	}
 	sub, rest := args[0], args[1:]
+
+	switch sub {
+	case "version", "--version", "-v":
+		fmt.Println("audit-report", version)
+		return nil
+	case "help", "--help", "-h":
+		fmt.Println(usage)
+		return nil
+	}
 
 	fs := flag.NewFlagSet(sub, flag.ContinueOnError)
 	from := fs.String("from", time.Now().Add(-24*time.Hour).Format(time.RFC3339), "start time (RFC3339)")

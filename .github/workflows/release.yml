@@ -1,0 +1,42 @@
+# release.yml
+#
+# Builds cross-platform audit-report binaries and publishes a Homebrew
+# formula to tenaciousdlg/homebrew-tap, triggered by pushing a `v*` tag
+# (see .goreleaser.yaml for what actually gets built).
+#
+# REQUIRED SECRET: HOMEBREW_TAP_GITHUB_TOKEN — a fine-grained personal
+# access token scoped to Contents: read/write on tenaciousdlg/homebrew-tap
+# only. The default GITHUB_TOKEN can't push there since it's a different
+# repo. Create one at https://github.com/settings/tokens and add it under
+# this repo's Settings → Secrets and variables → Actions.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}

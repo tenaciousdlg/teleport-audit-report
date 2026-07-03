@@ -1,0 +1,59 @@
+# .goreleaser.yaml
+#
+# Builds only the audit-report CLI as a distributable binary (audit-sink is
+# Docker-only — it's a server, not something you install locally) and
+# publishes a Homebrew formula to tenaciousdlg/homebrew-tap on release.
+#
+# Triggered by .github/workflows/release.yml on pushing a `v*` tag.
+
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: audit-report
+    main: ./cmd/audit-report
+    binary: audit-report
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: audit-report
+    ids: [audit-report]
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+
+checksum:
+  name_template: "checksums.txt"
+
+brews:
+  - name: teleport-audit-report
+    ids: [audit-report]
+    repository:
+      owner: tenaciousdlg
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/tenaciousdlg/teleport-audit-report"
+    description: "Audit reporting CLI for a Teleport cluster (activity, requests, security, compliance)"
+    license: "MIT"
+    install: |
+      bin.install "audit-report"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/audit-report version")
+
+release:
+  github:
+    owner: tenaciousdlg
+    name: teleport-audit-report

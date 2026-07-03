@@ -32,10 +32,11 @@ Compose network, so nothing needs to be exposed publicly.
 
 ## Prerequisites
 
-- Docker and Docker Compose
-- Go 1.25+ — `audit-report` isn't containerized (it's meant to run on your
-  machine against the published Postgres port), so this is required, not
-  optional
+- Docker and Docker Compose (for the ingestion pipeline: postgres, tbot,
+  event-handler, audit-sink)
+- `audit-report` itself: either `brew install tenaciousdlg/tap/teleport-audit-report`
+  (prebuilt binary), or Go 1.25+ to run it from source (`go run
+  ./cmd/audit-report ...`) — see [Installing the CLI](#installing-the-cli)
 - OpenSSL — needed once during setup to decrypt a generated key (see
   `event-handler/README.md`)
 - `tsh`/`tctl` logged into the target Teleport cluster, with a role that can
@@ -81,33 +82,58 @@ Compose network, so nothing needs to be exposed publicly.
    auth errors, and audit-sink logging incoming `POST` requests with `200`
    responses.
 
+## Installing the CLI
+
+```sh
+brew install tenaciousdlg/tap/teleport-audit-report
+audit-report version
+```
+
+This installs the `audit-report` binary only — the ingestion pipeline
+(postgres/tbot/event-handler/audit-sink) still runs via Docker Compose per
+the Setup section above; the CLI just needs `DATABASE_URL` to reach whatever
+Postgres that stack published.
+
+No prebuilt binary yet, or want to build from source instead? Skip the
+`brew install` above and replace `audit-report` with `go run
+./cmd/audit-report` in the commands below (or `go build -o audit-report
+./cmd/audit-report` once, then use the binary the same way).
+
 ## Running reports
 
 `audit-report` connects to Postgres on `localhost:5432` (published by
-Compose), so it just runs as a local binary — no need to containerize it.
-It reads `DATABASE_URL` from your environment (or pass `--db` directly), so
-source `.env` first:
+Compose). It reads `DATABASE_URL` from your environment (or pass `--db`
+directly), so source `.env` first:
 
 ```sh
 set -a; source .env; set +a
 
-go run ./cmd/audit-report activity   --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
-go run ./cmd/audit-report requests   --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
-go run ./cmd/audit-report security   --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
-go run ./cmd/audit-report compliance --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z --user=jdoe@example.com --format=csv > jdoe-july.csv
+audit-report activity   --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
+audit-report requests   --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
+audit-report security   --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
+audit-report compliance --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z --user=jdoe@example.com --format=csv > jdoe-july.csv
 ```
 
 Flags across all four subcommands:
 
-| Flag        | Default                  | Notes                                  |
-| ----------- | ------------------------ | --------------------------------------- |
-| `--from`    | 24h ago                  | RFC3339                                 |
-| `--to`      | now                      | RFC3339                                 |
-| `--user`    | (all users)              | For `requests`, filters by requester — a request's own review/approval events by a *different* user still count, so its state is never shown incomplete |
-| `--format`  | `table`                  | `table`, `csv`, or `json`               |
-| `--db`      | `$DATABASE_URL`          | Postgres connection string              |
+| Flag         | Default                  | Notes                                  |
+| ------------ | ------------------------ | --------------------------------------- |
+| `--from`     | 24h ago                  | RFC3339                                 |
+| `--to`       | now                      | RFC3339, ignored with `--watch`         |
+| `--user`     | (all users)              | For `requests`, filters by requester — a request's own review/approval events by a *different* user still count, so its state is never shown incomplete |
+| `--format`   | `table`                  | `table`, `csv`, or `json`               |
+| `--db`       | `$DATABASE_URL`          | Postgres connection string              |
+| `--watch`    | off                      | Poll and re-render continuously (like `watch`) instead of running once — see below |
+| `--interval` | `5s`                     | Refresh interval when `--watch` is set  |
 
-Or build a binary once: `go build -o audit-report ./cmd/audit-report`.
+For a live view instead of a point-in-time report, add `--watch` and keep
+`--from` recent (each refresh re-queries and reprints the whole window):
+
+```sh
+# --from/--to take RFC3339 timestamps, not relative durations — this is
+# "15 minutes ago" on macOS (use `date -u -d '-15 minutes'` on Linux):
+audit-report security --from=$(date -u -v-15M +%Y-%m-%dT%H:%M:%SZ) --watch
+```
 
 ## Verifying it's actually working
 
@@ -125,6 +151,20 @@ Or build a binary once: `go build -o audit-report ./cmd/audit-report`.
    re-check the count query — it shouldn't grow (dedup on `uid` via
    `ON CONFLICT DO NOTHING` in `internal/ingest`), and `audit-sink`'s logs
    shouldn't show a retry storm.
+
+## Cutting a release (maintainers)
+
+Pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs
+[goreleaser](https://goreleaser.com) (config in `.goreleaser.yaml`) to build
+cross-platform `audit-report` binaries, attach them to a GitHub Release, and
+publish a formula to `tenaciousdlg/homebrew-tap`.
+
+One-time setup required before the first release will fully succeed: create
+a fine-grained GitHub personal access token scoped to `Contents: read/write`
+on `tenaciousdlg/homebrew-tap` only, then add it as this repo's
+`HOMEBREW_TAP_GITHUB_TOKEN` secret (Settings → Secrets and variables →
+Actions). The default `GITHUB_TOKEN` can't push there since it's a
+different repo.
 
 ## Known gotchas (from Teleport's own docs on this plugin)
 
