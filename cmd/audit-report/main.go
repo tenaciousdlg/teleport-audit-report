@@ -268,8 +268,9 @@ func runReportCommand(sub string, rest []string) error {
 	if sub == "security" && *outFormat == "table" && !*summary {
 		legend = "severity is this tool's own risk judgment, not a named external framework; " +
 			"detail = login connector or resource name; success is blank when an event has " +
-			"no meaningful success/failure split (e.g. role/user lifecycle changes). Full " +
-			"reasoning: REPORTS.md.\n\n"
+			"no meaningful success/failure split (e.g. role/user lifecycle changes); actor " +
+			"\"system\" = Teleport's own automation (e.g. access-list/plugin role sync), not " +
+			"a person. Full reasoning: REPORTS.md.\n\n"
 	}
 
 	if !*watch {
