@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -21,28 +22,83 @@ import (
 // goreleaser injects the tag. Defaults to "dev" for `go run`/`go build`.
 var version = "dev"
 
-const usage = "usage: audit-report <activity|requests|security|compliance|version> [flags]"
-
-func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "audit-report:", err)
-		os.Exit(1)
-	}
+// commands drives both the top-level help listing and command validation,
+// so adding a report type only means updating this and the switch in
+// runReport.
+var commands = []struct {
+	name, help string
+}{
+	{"activity", "Session/access activity: SSH, Kubernetes, database, and app sessions"},
+	{"requests", "Access-request lifecycle: created, reviewed, approved/denied"},
+	{"security", "Failed authentication attempts and privilege-affecting changes"},
+	{"compliance", "Raw, filtered event export for a time range"},
+	{"version", "Print the audit-report version"},
+	{"help", "Show this help"},
 }
 
-func run(args []string) error {
+func main() {
+	os.Exit(run(os.Args[1:]))
+}
+
+func run(args []string) int {
 	if len(args) == 0 {
-		return errors.New(usage)
+		printUsage(os.Stderr)
+		return 1
 	}
 	sub, rest := args[0], args[1:]
 
 	switch sub {
 	case "version", "--version", "-v":
 		fmt.Println("audit-report", version)
-		return nil
+		return 0
 	case "help", "--help", "-h":
-		fmt.Println(usage)
-		return nil
+		printUsage(os.Stdout)
+		return 0
+	}
+
+	if err := runReportCommand(sub, rest); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			// The flag package already printed this command's usage.
+			return 0
+		}
+		fmt.Fprintln(os.Stderr, "audit-report:", err)
+		return 1
+	}
+	return 0
+}
+
+func printUsage(w io.Writer) {
+	fmt.Fprintf(w, "audit-report — audit reporting for a Teleport cluster, backed by the\nPostgres database audit-sink populates from Teleport's Event Handler.\n\n")
+	fmt.Fprintf(w, "Usage:\n  audit-report <command> [flags]\n\n")
+	fmt.Fprintln(w, "Commands:")
+	for _, c := range commands {
+		fmt.Fprintf(w, "  %-11s %s\n", c.name, c.help)
+	}
+	fmt.Fprintf(w, `
+Flags (activity, requests, security, compliance):
+  --from string       Start time, RFC3339 (default: 24h ago)
+  --to string         End time, RFC3339, ignored with --watch (default: now)
+  --user string       Filter to one user (activity/compliance: actor; requests: requester)
+  --format string     table, csv, or json (default: table)
+  --db string         Postgres connection string (default: $DATABASE_URL)
+  --watch             Poll and re-render continuously instead of running once
+  --interval duration Refresh interval when --watch is set (default: 5s)
+
+Examples:
+  audit-report activity --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
+  audit-report security --watch
+  audit-report compliance --user=jdoe@example.com --format=csv > export.csv
+
+Requires: the ingestion pipeline (postgres, tbot, event-handler, audit-sink)
+running via Docker Compose, and DATABASE_URL pointing at it — see this
+repo's README.md for setup. Run 'audit-report <command> -h' for
+command-specific flag details.
+`)
+}
+
+func runReportCommand(sub string, rest []string) error {
+	if !isReportCommand(sub) {
+		return fmt.Errorf("unknown command %q — run 'audit-report help' for the list of commands", sub)
 	}
 
 	fs := flag.NewFlagSet(sub, flag.ContinueOnError)
@@ -51,8 +107,18 @@ func run(args []string) error {
 	user := fs.String("user", "", "filter to a single user (activity, compliance; requests filters by requester)")
 	outFormat := fs.String("format", "table", "output format: table, csv, json")
 	dbURL := fs.String("db", os.Getenv("DATABASE_URL"), "Postgres connection string (default: $DATABASE_URL)")
-	watch := fs.Bool("watch", false, "poll and re-render continuously instead of running once, like `watch`")
+	watch := fs.Bool("watch", false, "poll and re-render continuously instead of running once, like the watch(1) command")
 	interval := fs.Duration("interval", 5*time.Second, "how often to refresh when --watch is set")
+	fs.Usage = func() {
+		desc := ""
+		for _, c := range commands {
+			if c.name == sub {
+				desc = c.help
+			}
+		}
+		fmt.Fprintf(fs.Output(), "audit-report %s — %s\n\nFlags:\n", sub, desc)
+		fs.PrintDefaults()
+	}
 	if err := fs.Parse(rest); err != nil {
 		return err
 	}
@@ -66,7 +132,8 @@ func run(args []string) error {
 		return fmt.Errorf("invalid --to: %w", err)
 	}
 	if *dbURL == "" {
-		return fmt.Errorf("missing --db (or set DATABASE_URL)")
+		return errors.New("missing Postgres connection string: pass --db or set $DATABASE_URL " +
+			"(see README.md's Setup section — you likely just need to `source .env`)")
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -74,9 +141,24 @@ func run(args []string) error {
 
 	pool, err := pgxpool.New(ctx, *dbURL)
 	if err != nil {
-		return fmt.Errorf("connect to postgres: %w", err)
+		return fmt.Errorf("invalid --db/DATABASE_URL: %w", err)
 	}
 	defer pool.Close()
+
+	// pgxpool.New only parses the connection string; it doesn't actually
+	// connect until first use. Ping now so a down/unreachable pipeline
+	// fails fast with an actionable message instead of a raw dial error
+	// surfacing later from inside a query.
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := pool.Ping(pingCtx); err != nil {
+		cfg := pool.Config().ConnConfig
+		return fmt.Errorf("cannot reach Postgres at %s:%d: %w\n\n"+
+			"Is the ingestion pipeline running? From the repo root:\n"+
+			"  docker compose up -d\n"+
+			"Then re-run this command. See README.md's Setup section if you haven't\n"+
+			"bootstrapped the stack yet.", cfg.Host, cfg.Port, err)
+	}
 
 	runReport := func(ctx context.Context, to time.Time) (format.Result, error) {
 		filter := report.Filter{From: fromTime, To: to, User: *user}
@@ -90,7 +172,7 @@ func run(args []string) error {
 		case "compliance":
 			return report.Compliance(ctx, pool, filter)
 		default:
-			return format.Result{}, fmt.Errorf("unknown report %q (want activity, requests, security, or compliance)", sub)
+			return format.Result{}, fmt.Errorf("unknown report %q", sub)
 		}
 	}
 
@@ -103,6 +185,15 @@ func run(args []string) error {
 	}
 
 	return watchLoop(ctx, sub, *interval, *outFormat, runReport)
+}
+
+func isReportCommand(sub string) bool {
+	switch sub {
+	case "activity", "requests", "security", "compliance":
+		return true
+	default:
+		return false
+	}
 }
 
 // watchLoop re-runs the report on a fixed interval against a continuously
