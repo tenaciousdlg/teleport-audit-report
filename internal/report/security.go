@@ -2,6 +2,7 @@ package report
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/tenaciousdlg/teleport-audit-report/internal/format"
@@ -14,6 +15,11 @@ import (
 // https://goteleport.com/docs/reference/audit-events/ — not `user.login`,
 // which only covers the initial SAML login) and against
 // gravitational/teleport's lib/events/api.go for the exact constants.
+//
+// user.login is the one exception to "hide successful attempts" — see
+// filterSecurityRows: a *first-ever-seen* successful login is shown
+// regardless, since a brand new identity authenticating is itself a
+// signal worth surfacing.
 //
 // device.authenticate.confirm and mfa_auth_challenge.validate are included
 // on the same "only show if not a confirmed success" basis, even though
@@ -87,7 +93,18 @@ var botFilteredTypes = map[string]bool{
 	"session.recording.access": true,
 }
 
+// isBotEvent prefers the official `user_kind` enum (USER_KIND_BOT = 2,
+// api/proto/teleport/legacy/types/events/events.proto:70-83) when present —
+// verified against real events that it's populated on both
+// botFilteredTypes members. Falls back to the `bot_name` field since
+// `user_kind` was only added in Teleport v15 and isn't set on every event
+// type (e.g. SSO user.login events never set it, per direct inspection of
+// lib/auth/github.go) — bot_name remains the safety net, not a redundant
+// check.
 func isBotEvent(raw []byte) bool {
+	if rawField(raw, "user_kind") == "2" {
+		return true
+	}
 	return rawField(raw, "bot_name") != ""
 }
 
@@ -101,7 +118,9 @@ func isBotEvent(raw []byte) bool {
 var eventSeverity = map[string]string{
 	// Routine RBAC/authn friction: users trying something they don't (yet)
 	// have access to, or a login attempt that didn't complete. Expected,
-	// frequent, rarely worth individual investigation.
+	// frequent, rarely worth individual investigation. A *successful*
+	// user.login is handled separately in filterSecurityRows (HIGH if
+	// it's this identity's first one in our data, hidden otherwise).
 	"user.login": "LOW",
 	"auth":       "LOW",
 
@@ -166,9 +185,10 @@ func severityOf(eventType string) string {
 	return "INFO"
 }
 
-// Security surfaces failed authentication attempts and privilege-affecting
-// changes: locks, role/user/bot/connector/access-list lifecycle, recovery
-// codes, and cluster-wide auth policy or CA changes.
+// Security surfaces failed authentication attempts, first-time-seen
+// successful logins, and privilege-affecting changes: locks,
+// role/user/bot/connector/access-list lifecycle, recovery codes, and
+// cluster-wide auth policy or CA changes.
 func Security(ctx context.Context, pool *pgxpool.Pool, f Filter) (format.Result, error) {
 	for t := range authAttemptTypes {
 		f.Types = append(f.Types, t)
@@ -178,31 +198,94 @@ func Security(ctx context.Context, pool *pgxpool.Pool, f Filter) (format.Result,
 	if err != nil {
 		return format.Result{}, err
 	}
-	return filterSecurityRows(rows), nil
+
+	firstLogins, err := firstLoginUIDs(ctx, pool)
+	if err != nil {
+		return format.Result{}, err
+	}
+
+	return filterSecurityRows(rows, firstLogins), nil
 }
 
-// filterSecurityRows drops only *confirmed* successful authentication
-// attempts (normal activity, covered by Activity) and bot-attributed
-// occurrences of botFilteredTypes, rendering everything else. Deliberately
-// treats a missing/unknown `success` field as "show it" rather than "assume
-// success and hide it" — safer default when we're not certain every
-// authAttemptTypes member always carries that field. Split out from
-// Security so it's testable with synthetic EventRows, no database needed.
-func filterSecurityRows(rows []EventRow) format.Result {
-	res := format.Result{Columns: []string{"time", "severity", "event_type", "actor", "detail", "success"}}
+// firstLoginUIDs returns, for every user with at least one successful
+// user.login in this tool's own ingested history, the uid of their
+// earliest one. "History" here means only what this pipeline has actually
+// ingested since it started running — there is no way to know from this
+// data alone whether an identity authenticated before ingestion began, so
+// an existing user will look "new" exactly once, the first time this tool
+// happens to observe them, and never again after. That's the honest
+// definition of "first-seen" available here; treat it as "new to us," not
+// "new to the cluster."
+func firstLoginUIDs(ctx context.Context, pool *pgxpool.Pool) (map[string]string, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT DISTINCT ON (user_name) user_name, uid
+		FROM events
+		WHERE event_type = 'user.login' AND success = true AND user_name != ''
+		ORDER BY user_name, event_time ASC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query first login uids: %w", err)
+	}
+	defer rows.Close()
+
+	out := map[string]string{}
+	for rows.Next() {
+		var user, uid string
+		if err := rows.Scan(&user, &uid); err != nil {
+			return nil, fmt.Errorf("scan first login uid: %w", err)
+		}
+		out[user] = uid
+	}
+	return out, rows.Err()
+}
+
+// filterSecurityRows drops confirmed-successful authentication attempts
+// (normal activity, covered by Activity) — except a user.login that is
+// this identity's first-ever-seen successful login, which is shown
+// regardless — and bot-attributed occurrences of botFilteredTypes.
+// Deliberately treats a missing/unknown `success` field as "show it"
+// rather than "assume success and hide it" — safer default when we're not
+// certain every authAttemptTypes member always carries that field. Split
+// out from Security so it's testable with synthetic EventRows, no database
+// needed.
+func filterSecurityRows(rows []EventRow, firstLoginUID map[string]string) format.Result {
+	res := format.Result{Columns: []string{"time", "severity", "event_type", "actor", "detail", "source", "success"}}
 	for _, e := range rows {
-		if authAttemptTypes[e.Type] && e.Success != nil && *e.Success {
+		isSuccess := e.Success != nil && *e.Success
+
+		if e.Type == "user.login" && isSuccess {
+			if e.UID == "" || firstLoginUID[e.User] != e.UID {
+				continue // this identity has a successful login before this one, in our data
+			}
+		} else if authAttemptTypes[e.Type] && isSuccess {
 			continue
 		}
+
 		if botFilteredTypes[e.Type] && isBotEvent(e.Raw) {
 			continue
 		}
+
 		detail := rawField(e.Raw, "name")
+		severity := severityOf(e.Type)
+		if e.Type == "user.login" {
+			detail = rawField(e.Raw, "connector_id")
+			if isSuccess {
+				severity = "HIGH" // this identity's first-ever-seen successful login
+			}
+		}
+		// addr.remote (the literal JSON key — verified against real events,
+		// not nested under a sub-object) is where an auth attempt actually
+		// came from. Confirmed present on user.login and auth; confirmed
+		// ABSENT on device.authenticate — rawField already returns "" for
+		// event types that don't carry it, so this is safe to try
+		// unconditionally rather than hand-listing which types have it.
+		source := rawField(e.Raw, "addr.remote")
+
 		success := ""
 		if e.Success != nil {
 			success = boolString(*e.Success)
 		}
-		res.Rows = append(res.Rows, []any{e.Time, severityOf(e.Type), e.Type, e.User, detail, success})
+		res.Rows = append(res.Rows, []any{e.Time, severity, e.Type, e.User, detail, source, success})
 	}
 	return res
 }

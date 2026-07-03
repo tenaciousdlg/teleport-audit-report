@@ -114,12 +114,22 @@ tries to avoid elsewhere. The reasoning per tier (see
 Adjust the mapping in code freely if your environment's risk tolerance
 differs — it's a starting point, not a certified control mapping.
 
+Two columns worth calling out: `source` is the remote address an
+authentication attempt came from (`addr.remote` in the raw event) — present
+on `user.login` and `auth`, confirmed absent on `device.authenticate`
+(left blank there, not an error). `detail` shows the connector for
+`user.login` rows, or a resource `name` for everything else (roles, locks,
+etc.).
+
 Two categories, handled differently:
 
 **Authentication attempts** (`user.login`, `auth`, `device.authenticate`,
 `device.authenticate.confirm`, `mfa_auth_challenge.validate`) are only
 shown when *not* a confirmed success — a successful login is normal
-activity, not a security event. Note that a denied action (e.g. `tsh ssh`
+activity, not a security event — **except `user.login`, where a
+successful login is shown if it's the first one this tool has ever
+ingested for that identity.** See "First-seen logins" below for exactly
+what that does and doesn't mean. Note that a denied action (e.g. `tsh ssh`
 to a node you don't have a role for) surfaces as event type `auth`, code
 `T3007W` ("Auth Attempt Failed"), **not** `user.login` — `user.login`
 covers only the initial SAML/OIDC/local login, confirmed at
@@ -129,6 +139,38 @@ in the Teleport source. A missing/unknown `success` field is treated as
 "show it," not "assume success and hide it" — safer given this tool hasn't
 independently confirmed every one of these event types always carries that
 field.
+
+### First-seen logins
+
+A successful `user.login` is normally hidden (routine activity), except
+the *first* one this tool has ever ingested for a given identity — shown
+at `HIGH` severity, since a brand-new identity successfully authenticating
+is a meaningful signal a purely failure-based view would miss entirely.
+This came directly from a live-fire exercise: logging in as a new identity
+and trying to access things produced nothing in `security` at all, because
+the login succeeded and nothing else was attempted.
+
+**"First-seen" means exactly one thing: the first login this specific
+Postgres database has ever recorded for that `user_name` — not the first
+login ever, on this cluster, in Teleport's own (likely much longer) audit
+retention.** There is no way to know from this tool's data alone whether
+an identity authenticated before this pipeline started ingesting events;
+an existing user who simply hasn't logged in since you stood up this
+pipeline will show as "first-seen" exactly once, the first time this tool
+happens to observe them. Checked directly against Teleport's source
+(`lib/auth/github.go`, the JIT SSO user-provisioning path) — there's no
+stronger cluster-side signal to use instead: a JIT-provisioned SSO user's
+actual first-ever login emits the exact same `user.login` event as any
+other login, with no accompanying `user.create` audit event to distinguish
+it. This tool's own ingestion history is the best signal available, not a
+compromise.
+
+Implementation: `internal/report/security.go`'s `firstLoginUIDs` finds, for
+every user with at least one successful login, the event `uid` of their
+earliest one (via SQL `DISTINCT ON`, not timestamp comparison — comparing
+event `uid`s avoids any precision/rounding ambiguity `time.Time` equality
+could introduce). A login is "first-seen" only if its own `uid` matches
+that value exactly.
 
 **Privilege- and trust-affecting changes** are always shown, since they
 have no meaningful success/failure split — any occurrence is worth
@@ -175,10 +217,14 @@ Both are legitimate noise from a bot doing its job, but the exact same two
 event types are how a **human's** role grants changing, or a human
 reviewing someone's session, would show up — which is a real signal that
 must not be filtered out along with the noise. `internal/report/security.go`
-distinguishes the two by checking for a `bot_name` field on the raw event
-(present on every bot-attributed occurrence found during testing): bot
-occurrences are dropped, human occurrences are shown at `HIGH`/`MEDIUM`
-severity respectively.
+distinguishes the two by checking `user_kind` — a formal enum on Teleport's
+common event metadata (`USER_KIND_BOT = 2`,
+`api/proto/teleport/legacy/types/events/events.proto:70-83`), confirmed
+present on real bot-attributed occurrences of both event types — falling
+back to the `bot_name` field for event types that don't set `user_kind`
+(confirmed via Teleport source that SSO `user.login` events never set it,
+so it can't be relied on universally): bot occurrences are dropped, human
+occurrences are shown at `HIGH`/`MEDIUM` severity respectively.
 
 ## `compliance` — raw, filtered export
 
@@ -257,5 +303,7 @@ watching something live beats `2026-07-03T12:53:57-05:00`.
   <https://goteleport.com/docs/identity-governance/access-monitoring/>
 - Event type constants: `lib/events/api.go` in
   [gravitational/teleport](https://github.com/gravitational/teleport)
-- Event field shapes: `api/proto/teleport/legacy/types/events/events.proto`
+- Event field shapes and the `UserKind` enum: `api/proto/teleport/legacy/types/events/events.proto`
   in the same repo
+- JIT SSO user provisioning (no dedicated first-login audit event exists):
+  `lib/auth/github.go` (`createGithubUser`, `validateGithubAuthCallbackHelper`)
