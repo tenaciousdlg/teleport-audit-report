@@ -1,0 +1,9 @@
+# Allowlist, not a denylist: audit-sink only needs the Go module files and
+# source to build. Everything else in the repo — .env, event-handler/'s
+# private keys, tbot's join token, terraform state — must never enter the
+# build context, even as an intermediate layer in a multi-stage build.
+*
+!go.mod
+!go.sum
+!cmd/
+!internal/
