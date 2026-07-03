@@ -15,10 +15,16 @@ import (
 // audit event types (see the "Event Structure" section of Teleport's audit
 // event reference). Everything else is preserved verbatim in Raw.
 //
-// The actor isn't always the top-level `user` field: cert-issuance-shaped
-// events (cert.create, and similarly bot-related events) instead nest it
-// under `identity.user` — verified against real events from this cluster,
-// not assumed from the docs.
+// The actor isn't always the top-level `user` field. Verified against real
+// events from this cluster, not assumed from the docs:
+//   - cert-issuance-shaped events (cert.create, and similarly bot-related
+//     events) nest it under `identity.user`
+//   - bot.join carries the joining bot's identity under a top-level
+//     `user_name` field instead — found as a real bug (every bot.join row
+//     showed a blank actor, including in the `user_name` DB column itself,
+//     which broke `--user=<bot>` filtering, not just display)
+//   - access_request.review has no `user`/`identity.user`/`user_name` at
+//     all; the acting identity is the reviewer, under `reviewer`
 type event struct {
 	UID         string    `json:"uid"`
 	Event       string    `json:"event"`
@@ -29,16 +35,24 @@ type event struct {
 	Identity    struct {
 		User string `json:"user"`
 	} `json:"identity"`
+	UserName  string          `json:"user_name"`
+	Reviewer  string          `json:"reviewer"`
 	SessionID string          `json:"sid"`
 	Success   *bool           `json:"success"`
 	Raw       json.RawMessage `json:"-"`
 }
 
 func (e *event) actor() string {
-	if e.User != "" {
+	switch {
+	case e.User != "":
 		return e.User
+	case e.Identity.User != "":
+		return e.Identity.User
+	case e.UserName != "":
+		return e.UserName
+	default:
+		return e.Reviewer
 	}
-	return e.Identity.User
 }
 
 // Store applies schema.sql via db.Connect before this is used.

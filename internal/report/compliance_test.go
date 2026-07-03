@@ -9,6 +9,9 @@ func TestActorOfFallsBackToRawUserName(t *testing.T) {
 	if got := actorOf("", []byte(`{"user_name":"bot-slack-plugin"}`)); got != "bot-slack-plugin" {
 		t.Errorf("actorOf(\"\", ...) = %q, want the raw user_name fallback", got)
 	}
+	if got := actorOf("", []byte(`{"reviewer":"dlg@goteleport.com"}`)); got != "dlg@goteleport.com" {
+		t.Errorf("actorOf(\"\", ...) = %q, want the raw reviewer fallback", got)
+	}
 	if got := actorOf("", []byte(`{}`)); got != "" {
 		t.Errorf("actorOf(\"\", {}) = %q, want empty string when neither is set", got)
 	}

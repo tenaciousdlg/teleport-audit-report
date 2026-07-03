@@ -41,20 +41,23 @@ func Compliance(ctx context.Context, pool *pgxpool.Pool, f Filter, includeRaw bo
 	return res, nil
 }
 
-// actorOf falls back to the raw event's `user_name` field when the
-// database's own `user_name` column is empty. Found via a real gap:
-// bot.join events carry the joining bot's identity under a top-level
-// `user_name` key, not `user`/`identity.user` — the only two fields
-// internal/ingest's actor() extraction checks — so every bot.join row was
-// silently showing a blank actor in every report that includes it (only
-// `compliance`, since bot.join isn't in activity's or security's curated
-// type lists). This is a display-time fallback rather than an ingest fix so
-// it also recovers already-ingested rows, not just future ones.
+// actorOf falls back to the raw event's `user_name`/`reviewer` fields when
+// the database's own `user_name` column is empty. `internal/ingest`'s
+// actor() extraction now also checks both (see its doc comment for the two
+// real gaps that found: bot.join's actor lives under `user_name`,
+// access_request.review's under `reviewer`, neither under `user`/
+// `identity.user`), so this only matters for rows ingested before that fix
+// shipped — the DB column itself was already wrong for them, and dedup on
+// `uid` means they'll never be re-ingested. New rows are correct at the
+// column level, and this fallback becomes a no-op for them.
 func actorOf(user string, raw []byte) string {
 	if user != "" {
 		return user
 	}
-	return rawField(raw, "user_name")
+	if v := rawField(raw, "user_name"); v != "" {
+		return v
+	}
+	return rawField(raw, "reviewer")
 }
 
 // complianceDetail surfaces one "what happened" field per row, same idea as

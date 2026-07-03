@@ -6,10 +6,15 @@ import (
 	"testing"
 )
 
-// TestActorFallsBackToIdentityUser is a regression test: cert.create and
-// other bot-related events nest the actor under identity.user instead of a
-// top-level user field, which the ingest logic originally missed entirely.
-func TestActorFallsBackToIdentityUser(t *testing.T) {
+// TestActorFallbackChain is a regression test covering three real gaps
+// found in production, each where Teleport puts the acting identity under a
+// different field than the last: cert.create-shaped events nest it under
+// identity.user; bot.join uses a top-level user_name instead, which
+// originally caused every bot.join row to show a blank actor (including in
+// the database column itself, breaking --user=<bot> filtering, not just
+// display); access_request.review has none of those and instead carries
+// the reviewer's identity under reviewer.
+func TestActorFallbackChain(t *testing.T) {
 	cases := []struct {
 		name string
 		raw  string
@@ -31,8 +36,18 @@ func TestActorFallsBackToIdentityUser(t *testing.T) {
 			want: "top-level",
 		},
 		{
-			name: "neither present",
-			raw:  `{"uid":"4","event":"bot.join"}`,
+			name: "falls back to user_name for bot.join, which has neither user nor identity.user",
+			raw:  `{"uid":"4","event":"bot.join","user_name":"bot-slack-plugin"}`,
+			want: "bot-slack-plugin",
+		},
+		{
+			name: "falls back to reviewer for access_request.review, which has none of the above",
+			raw:  `{"uid":"5","event":"access_request.review","reviewer":"dlg@goteleport.com"}`,
+			want: "dlg@goteleport.com",
+		},
+		{
+			name: "none present",
+			raw:  `{"uid":"6","event":"access_request.expire"}`,
 			want: "",
 		},
 	}

@@ -81,7 +81,23 @@ final `state`, and time-to-decision. Field names — `id`, `roles`, `reason`,
 `reviewer`, `state`, `proposed_state` — are confirmed against the
 `AccessRequestCreate` proto message
 (`api/proto/teleport/legacy/types/events/events.proto:1588-1683`), which is
-the shared struct behind the create/update/review event variants.
+the shared struct behind the create/update/**review** event variants —
+`create`/`review` are directly confirmed against real events from this
+cluster; `update` shares the same message (confirmed via the proto's own
+"emitted when access request has been created or updated" comment) but has
+produced zero events on this cluster so far, so it's cited against source,
+not independently observed. `access_request.delete` uses a different,
+smaller message (`AccessRequestDelete`, same file, ~line 1776) with only an
+`id` field — no `state` — also unobserved here, cited against source only.
+
+**`access_request.review` has no `user`/`identity.user` field at all** — the
+acting identity (the reviewer, not the requester) lives only under
+`reviewer`. `requests.go` already reads it directly via `rawField`, so this
+never affected this report — but it's the same shape of gap that caused the
+`bot.join` bug below, and was found during the audit that traced that bug's
+root cause. `internal/ingest`'s actor() extraction now falls back to
+`reviewer` too, so a reviewer's identity is also correctly attributed in
+`compliance`, and `--user=<reviewer>` filtering works there.
 
 **A request's `state` reflects the latest event seen in your queried time
 window, not a permanently frozen outcome.** An approved request that later
@@ -275,14 +291,21 @@ Two columns beyond the raw event fields: **`detail`** surfaces one
 `cert.create`'s `cert_type`, `bot.join`'s `method`, or (falling back to)
 the same resource fields `activity` uses — same idea as `security`'s
 `detail` column, generalized since compliance has no fixed type list to
-special-case. **`user`** falls back to the raw event's `user_name` field
-when empty: `bot.join` events carry the joining bot's identity under a
-top-level `user_name` key that `internal/ingest`'s actor extraction doesn't
-check (it only looks at `user`/`identity.user`), so every `bot.join` row
-showed a blank actor until this fallback — found directly from real
-`compliance` output, not assumed. It's applied at query time, in
-`internal/report/compliance.go`, so it recovers rows already ingested
-before the fix, not just future ones.
+special-case. **`user`** falls back to the raw event's `user_name`/`reviewer`
+fields when empty — `internal/ingest`'s actor() extraction now checks both
+(see its doc comment: `bot.join` carries the joining bot's identity under
+`user_name`, `access_request.review` under `reviewer`, neither under
+`user`/`identity.user`, which caused every row of both types to show a
+blank actor — found directly from real `compliance` output, not assumed,
+then traced further via a full blank-actor sweep across every event type on
+this cluster to make sure nothing else had the same gap). Fixing it in
+`ingest.go` means new rows get the right `user_name` in the database
+itself, not just on screen — the original query-time-only fix left
+`--user=<bot>`/`--user=<reviewer>` filtering broken even though the display
+looked correct. `internal/report/compliance.go`'s `actorOf` keeps the same
+fallback at query time too, since dedup on `uid` means rows ingested before
+this fix will never be re-ingested with the corrected column — that part
+remains necessary for rows already in the database, not a leftover.
 
 The full raw JSON payload is always included in `csv`/`json` output — that
 completeness is the point of exporting. It's *not* included in the default
