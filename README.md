@@ -94,7 +94,7 @@ set -a; source .env; set +a
 go run ./cmd/audit-report activity   --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
 go run ./cmd/audit-report requests   --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
 go run ./cmd/audit-report security   --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
-go run ./cmd/audit-report compliance --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z --user=alice@example.com --format=csv > alice-july.csv
+go run ./cmd/audit-report compliance --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z --user=jdoe@example.com --format=csv > jdoe-july.csv
 ```
 
 Flags across all four subcommands:
