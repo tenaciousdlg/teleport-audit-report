@@ -39,6 +39,16 @@ var alwaysShowTypes = []string{
 	// Role and local user lifecycle (api.go ~ "role."/"user." CRUD block).
 	"role.created", "role.updated", "role.deleted",
 	"user.create", "user.delete",
+	// A human's role grants (or other account attributes) changing —
+	// found missing during a live-fire exercise: tbot renews its own
+	// bot identity via this same event type every ~20 minutes, which
+	// would otherwise swamp this report. See botFilteredTypes below —
+	// only non-bot occurrences are shown.
+	"user.update",
+	// Someone (or something) viewing a session recording. Also emitted
+	// internally by this tool's own Event Handler when it exports a
+	// recording, hence the same bot filtering as user.update above.
+	"session.recording.access",
 	// Account recovery — generating or using a recovery code bypasses
 	// normal MFA (api.go:601,603).
 	"recovery_code.generated", "recovery_code.used",
@@ -66,6 +76,21 @@ var alwaysShowTypes = []string{
 	"access_list.create", "access_list.update", "access_list.delete",
 }
 
+// botFilteredTypes are legitimately noisy when emitted by a bot doing its
+// own routine self-management (identity renewal, exporting recordings it
+// just streamed) but a real signal when the actor is a human. Detected via
+// the `bot_name` field, which was present on every bot-attributed
+// occurrence of both event types found during live testing against a real
+// cluster — not an assumption.
+var botFilteredTypes = map[string]bool{
+	"user.update":              true,
+	"session.recording.access": true,
+}
+
+func isBotEvent(raw []byte) bool {
+	return rawField(raw, "bot_name") != ""
+}
+
 // eventSeverity assigns each event type a rough triage priority. This is a
 // judgment call by this tool, not a mapping to any named external standard
 // (NIST/CIS/MITRE ATT&CK etc.) — there's no single authoritative source for
@@ -85,13 +110,15 @@ var eventSeverity = map[string]string{
 	"lock.created": "INFO",
 
 	// Somewhat more specific signals: device trust failing, an account
-	// being unlocked, provisioning/deprovisioning, and machine/access-list
-	// changes that are usually routine but worth tracking.
+	// being unlocked, provisioning/deprovisioning, someone reviewing a
+	// session recording, and machine/access-list changes that are usually
+	// routine but worth tracking.
 	"device.authenticate":         "MEDIUM",
 	"device.authenticate.confirm": "MEDIUM",
 	"lock.deleted":                "MEDIUM",
 	"user.create":                 "MEDIUM",
 	"user.delete":                 "MEDIUM",
+	"session.recording.access":    "MEDIUM",
 	"join_token.create":           "MEDIUM",
 	"bot.create":                  "MEDIUM",
 	"bot.update":                  "MEDIUM",
@@ -102,12 +129,14 @@ var eventSeverity = map[string]string{
 
 	// A stronger signal: MFA failing after primary auth already succeeded
 	// is a plausible credential-stuffing/MFA-bypass indicator, not routine
-	// friction. Role/connector/trust changes and recovery-code activity
-	// all directly expand or alter who can do what.
+	// friction. Role/connector/trust changes, a human's own account being
+	// updated, and recovery-code activity all directly expand or alter who
+	// can do what.
 	"mfa_auth_challenge.validate": "HIGH",
 	"role.created":                "HIGH",
 	"role.updated":                "HIGH",
 	"role.deleted":                "HIGH",
+	"user.update":                 "HIGH",
 	"recovery_code.generated":     "HIGH",
 	"recovery_code.used":          "HIGH",
 	"trusted_cluster.create":      "HIGH",
@@ -153,16 +182,19 @@ func Security(ctx context.Context, pool *pgxpool.Pool, f Filter) (format.Result,
 }
 
 // filterSecurityRows drops only *confirmed* successful authentication
-// attempts (normal activity, covered by Activity) and renders everything
-// else. Deliberately treats a missing/unknown `success` field as "show it"
-// rather than "assume success and hide it" — safer default when we're not
-// certain every authAttemptTypes member always carries that field. Split
-// out from Security so it's testable with synthetic EventRows, no database
-// needed.
+// attempts (normal activity, covered by Activity) and bot-attributed
+// occurrences of botFilteredTypes, rendering everything else. Deliberately
+// treats a missing/unknown `success` field as "show it" rather than "assume
+// success and hide it" — safer default when we're not certain every
+// authAttemptTypes member always carries that field. Split out from
+// Security so it's testable with synthetic EventRows, no database needed.
 func filterSecurityRows(rows []EventRow) format.Result {
 	res := format.Result{Columns: []string{"time", "severity", "event_type", "actor", "detail", "success"}}
 	for _, e := range rows {
 		if authAttemptTypes[e.Type] && e.Success != nil && *e.Success {
+			continue
+		}
+		if botFilteredTypes[e.Type] && isBotEvent(e.Raw) {
 			continue
 		}
 		detail := rawField(e.Raw, "name")

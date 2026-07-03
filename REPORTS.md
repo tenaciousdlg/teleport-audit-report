@@ -106,8 +106,8 @@ tries to avoid elsewhere. The reasoning per tier (see
 | Severity | Examples | Why |
 | -------- | -------- | --- |
 | `CRITICAL` | `auth_preference.update`, `cert_auth_override.*` | Cluster-wide auth policy or CA trust changes — the largest blast radius this report can surface |
-| `HIGH` | `role.*`, `recovery_code.*`, `trusted_cluster.*`, SSO connector CRUD, failed `mfa_auth_challenge.validate` | Directly expands/alters who can do what, or a plausible MFA-bypass signal (failing 2FA *after* primary auth succeeded is a stronger signal than routine login friction) |
-| `MEDIUM` | Failed `device.authenticate(.confirm)`, `lock.deleted`, `user.create/delete`, `join_token.create`, `bot.*`, `access_list.*` | Usually routine operational activity, but worth tracking |
+| `HIGH` | `role.*`, `user.update` (non-bot), `recovery_code.*`, `trusted_cluster.*`, SSO connector CRUD, failed `mfa_auth_challenge.validate` | Directly expands/alters who can do what, or a plausible MFA-bypass signal (failing 2FA *after* primary auth succeeded is a stronger signal than routine login friction) |
+| `MEDIUM` | Failed `device.authenticate(.confirm)`, `lock.deleted`, `user.create/delete`, `session.recording.access` (non-bot), `join_token.create`, `bot.*`, `access_list.*` | Usually routine operational activity, but worth tracking |
 | `LOW` | Failed `user.login`, `auth` | Routine RBAC/authn friction — people trying things they don't have access to yet, or mistyped credentials/expired sessions |
 | `INFO` | `lock.created`, anything unmapped | A defensive action the system itself took (the notable event is whatever triggered the lock, not the lock), or a type this tool doesn't have an opinion on yet |
 
@@ -136,6 +136,9 @@ knowing about:
 - Locking/unlocking a user (`lock.created`, `lock.deleted`)
 - Role and local user lifecycle (`role.created/updated/deleted`,
   `user.create/delete`)
+- A user's account being updated (`user.update`) — e.g. role grants
+  changing on an existing account
+- Someone viewing a session recording (`session.recording.access`)
 - Account recovery (`recovery_code.generated`, `recovery_code.used`) —
   bypasses normal MFA
 - Cluster-wide auth policy changes (`auth_preference.update`), e.g.
@@ -163,6 +166,20 @@ alert categories, and specifically calls out "authentication without MFA
 for local accounts" and "unusual authentication failure patterns" as
 triggers — the same shape of signal this report curates.
 
+**`user.update` and `session.recording.access` are filtered by actor, not
+just shown outright** — found via a live-fire exercise against a real
+cluster: `tbot` renews its own bot identity through `user.update` every
+~20 minutes, and this tool's own Event Handler triggers
+`session.recording.access` while exporting a recording it just streamed.
+Both are legitimate noise from a bot doing its job, but the exact same two
+event types are how a **human's** role grants changing, or a human
+reviewing someone's session, would show up — which is a real signal that
+must not be filtered out along with the noise. `internal/report/security.go`
+distinguishes the two by checking for a `bot_name` field on the raw event
+(present on every bot-attributed occurrence found during testing): bot
+occurrences are dropped, human occurrences are shown at `HIGH`/`MEDIUM`
+severity respectively.
+
 ## `compliance` — raw, filtered export
 
 **Use it to answer:** "give me everything for this time range/user" — no
@@ -176,6 +193,21 @@ The full raw JSON payload is always included in `csv`/`json` output — that
 completeness is the point of exporting. It's *not* included in the default
 `table` output, since a single-line JSON blob per row is unreadable in a
 terminal; pass `--raw` to include it there too.
+
+## `--summary`: what happened, at a glance
+
+Every report defaults to listing individual rows. Add `--summary` to
+instead collapse them into a count-by-type breakdown — how many of each
+`event_type` occurred (or, for `requests`, how many of each `state`) —
+which is usually the *first* question when investigating "what happened"
+in a window, before drilling into individual rows. Composes with
+`--watch` for a live-updating dashboard: `audit-report compliance
+--summary --watch` shows event-type counts climbing in real time instead
+of a scrolling row list.
+
+Without this, answering "what happened" meant dropping into `psql` to
+`GROUP BY event_type` by hand — a real gap found while using this tool to
+investigate a real incident, not a hypothetical one.
 
 ## `--watch`: live mode vs. a point-in-time report
 

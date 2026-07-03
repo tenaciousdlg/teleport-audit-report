@@ -120,6 +120,42 @@ func TestWriteUnknownFormat(t *testing.T) {
 	}
 }
 
+func TestSummarize(t *testing.T) {
+	res := Result{
+		Columns: []string{"time", "event_type", "user"},
+		Rows: [][]any{
+			{time.Now(), "cert.create", "a"},
+			{time.Now(), "user.login", "b"},
+			{time.Now(), "cert.create", "c"},
+			{time.Now(), "cert.create", "d"},
+		},
+	}
+
+	out := Summarize(res, "event_type")
+
+	if got, want := out.Columns, []string{"event_type", "count"}; got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("Columns = %v, want %v", got, want)
+	}
+	if len(out.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2 (cert.create, user.login): %+v", len(out.Rows), out.Rows)
+	}
+	// Sorted by count descending — cert.create (3) before user.login (1).
+	if out.Rows[0][0] != "cert.create" || out.Rows[0][1] != 3 {
+		t.Errorf("Rows[0] = %v, want [cert.create 3]", out.Rows[0])
+	}
+	if out.Rows[1][0] != "user.login" || out.Rows[1][1] != 1 {
+		t.Errorf("Rows[1] = %v, want [user.login 1]", out.Rows[1])
+	}
+}
+
+func TestSummarizeUnknownColumnReturnsUnchanged(t *testing.T) {
+	res := sampleResult()
+	out := Summarize(res, "does_not_exist")
+	if len(out.Columns) != len(res.Columns) || len(out.Rows) != len(res.Rows) {
+		t.Errorf("Summarize with an unknown column should return res unchanged, got %+v", out)
+	}
+}
+
 func TestStringifyNilAndBool(t *testing.T) {
 	cases := []struct {
 		in   any

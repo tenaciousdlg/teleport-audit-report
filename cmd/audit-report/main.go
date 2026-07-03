@@ -116,6 +116,7 @@ Flags (activity, requests, security, compliance):
   --format string     table, csv, or json (default: table)
   --human             Render timestamps in your local timezone, human-readable (table/csv only)
   --raw               compliance only: include the full raw JSON column in table output (csv/json always include it)
+  --summary           Show a count-by-type breakdown instead of individual rows (by event_type, or by state for requests)
   --db string         Postgres connection string (default: $DATABASE_URL)
   --watch             Poll and re-render continuously instead of running once
   --interval duration Refresh interval when --watch is set (default: 5s)
@@ -124,6 +125,7 @@ Examples:
   audit-report activity --from=2026-07-01T00:00:00Z --to=2026-07-03T00:00:00Z
   audit-report security --watch --human
   audit-report compliance --user=jdoe@example.com --format=csv > export.csv
+  audit-report compliance --summary --from=2026-07-01T00:00:00Z   # what happened, at a glance
   audit-report --watch       # shorthand for: security --watch
   audit-report --raw         # shorthand for: compliance --raw (--raw implies compliance when no command is given)
   audit-report --watch --raw --human   # shorthand for: compliance --watch --raw --human
@@ -148,6 +150,7 @@ func runReportCommand(sub string, rest []string) error {
 	outFormat := fs.String("format", "table", "output format: table, csv, json")
 	humanTime := fs.Bool("human", false, "render timestamps in your local timezone, human-readable (table/csv only)")
 	rawColumn := fs.Bool("raw", false, "compliance only: include the full raw JSON column in table output (csv/json always include it)")
+	summary := fs.Bool("summary", false, "show a count-by-type breakdown instead of individual rows")
 	dbURL := fs.String("db", os.Getenv("DATABASE_URL"), "Postgres connection string (default: $DATABASE_URL)")
 	watch := fs.Bool("watch", false, "poll and re-render continuously instead of running once, like the watch(1) command")
 	interval := fs.Duration("interval", 5*time.Second, "how often to refresh when --watch is set")
@@ -220,6 +223,26 @@ func runReportCommand(sub string, rest []string) error {
 			return report.Compliance(ctx, pool, filter, includeRaw)
 		default:
 			return format.Result{}, fmt.Errorf("unknown report %q", sub)
+		}
+	}
+
+	if *summary {
+		// requests has no event_type column (it's already aggregated to
+		// one row per request) — summarize by state instead. Every other
+		// report has event_type. Wrapping runReport here, rather than
+		// teaching watchLoop about --summary, keeps it a plain
+		// Result-in-Result-out function either way.
+		summarizeColumn := "event_type"
+		if sub == "requests" {
+			summarizeColumn = "state"
+		}
+		baseRunReport := runReport
+		runReport = func(ctx context.Context, to time.Time) (format.Result, error) {
+			res, err := baseRunReport(ctx, to)
+			if err != nil {
+				return res, err
+			}
+			return format.Summarize(res, summarizeColumn), nil
 		}
 	}
 

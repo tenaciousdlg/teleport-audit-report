@@ -67,6 +67,49 @@ func TestFilterSecurityRowsIncludesSeverityColumn(t *testing.T) {
 	}
 }
 
+// TestFilterSecurityRowsExcludesBotNoiseButKeepsHumanSignal is a regression
+// test from a live-fire exercise against a real cluster: tbot renews its
+// own bot identity via user.update every ~20 minutes, and this tool's own
+// Event Handler triggers session.recording.access while exporting a
+// recording it just streamed. Both are legitimate noise from a bot doing
+// its job, but the same two event types are exactly how a human's role
+// grants changing, or a human reviewing someone's session, would show up —
+// which must NOT be filtered out.
+func TestFilterSecurityRowsExcludesBotNoiseButKeepsHumanSignal(t *testing.T) {
+	rows := []EventRow{
+		// Real shape captured from tbot's own renewal cycle.
+		{Type: "user.update", User: "bot-event-handler", Raw: []byte(`{"user":"bot-event-handler","bot_name":"event-handler","connector":"local"}`)},
+		// Real shape captured from this tool's own Event Handler exporting
+		// a recording it had just streamed.
+		{Type: "session.recording.access", User: "bot-event-handler", Raw: []byte(`{"user":"bot-event-handler","bot_name":"event-handler"}`)},
+		// A human's account being updated — e.g. a role grant change —
+		// must still show up.
+		{Type: "user.update", User: "admin@example.com", Raw: []byte(`{"user":"admin@example.com","connector":"okta"}`)},
+		{Type: "session.recording.access", User: "auditor@example.com", Raw: []byte(`{"user":"auditor@example.com"}`)},
+	}
+
+	res := filterSecurityRows(rows)
+
+	if len(res.Rows) != 2 {
+		t.Fatalf("got %d rows, want 2 (bot-attributed rows filtered, human rows kept): %+v", len(res.Rows), res.Rows)
+	}
+	for _, row := range res.Rows {
+		actor := row[3]
+		if actor == "bot-event-handler" {
+			t.Errorf("bot-attributed row should have been filtered out, got: %v", row)
+		}
+	}
+}
+
+func TestIsBotEvent(t *testing.T) {
+	if !isBotEvent([]byte(`{"bot_name":"event-handler"}`)) {
+		t.Error("expected isBotEvent to be true when bot_name is present")
+	}
+	if isBotEvent([]byte(`{"user":"admin@example.com"}`)) {
+		t.Error("expected isBotEvent to be false when bot_name is absent")
+	}
+}
+
 func TestSeverityOfKnownAndUnknownTypes(t *testing.T) {
 	if got := severityOf("cert_auth_override.delete"); got != "CRITICAL" {
 		t.Errorf("severityOf(cert_auth_override.delete) = %q, want CRITICAL", got)

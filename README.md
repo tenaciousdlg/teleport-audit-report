@@ -147,14 +147,18 @@ Flags across all four subcommands:
 | `--format`   | `table`                  | `table`, `csv`, or `json`               |
 | `--human`    | off                      | Render timestamps in your local timezone, human-readable (`table`/`csv` only — `json` always uses RFC3339, for round-tripping) |
 | `--raw`      | off                      | `compliance` only: include the full raw JSON column in `table` output. `csv`/`json` always include it — a single-line JSON blob per row is unreadable in a terminal table, but that's the whole point of exporting to csv/json |
+| `--summary`  | off                      | Show a count-by-type breakdown (by `event_type`, or by `state` for `requests`) instead of individual rows — "what happened" at a glance |
 | `--db`       | `$DATABASE_URL`          | Postgres connection string              |
 | `--watch`    | off                      | Poll and re-render continuously (like `watch`) instead of running once — see below |
 | `--interval` | `5s`                     | Refresh interval when `--watch` is set  |
 
-`audit-report --watch` with no report type is shorthand for `audit-report
-security --watch` — the "is anything wrong right now" question a live-tail
-is usually actually asking. For an unfiltered live firehose instead, use
-`audit-report compliance --watch --raw`.
+Running `audit-report` with flags but no report type picks a sensible
+default rather than erroring: `--raw` anywhere in the flags routes to
+`compliance` (the only report a raw JSON column means anything for),
+otherwise it routes to `security` — so `audit-report --watch` is shorthand
+for `security --watch` (the "is anything wrong right now" question a
+live-tail is usually actually asking), and `audit-report --watch --raw` is
+shorthand for `compliance --watch --raw` (an unfiltered live firehose).
 
 For a live view instead of a point-in-time report, add `--watch` and keep
 `--from` recent (each refresh re-queries and reprints the whole window):

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -89,6 +90,47 @@ func writeJSON(w io.Writer, res Result) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(objs)
+}
+
+// Summarize collapses res down to a count-by-column breakdown — e.g. how
+// many rows of each event_type — instead of every individual row.
+// Investigating "what happened" often starts with this shape (a count per
+// category) rather than a full row-by-row listing, and without it,
+// answering "what happened" meant dropping into psql to GROUP BY manually.
+// If column isn't found in res.Columns, res is returned unchanged rather
+// than erroring, so callers can pass a best-guess column name per report
+// without needing to validate it first.
+func Summarize(res Result, column string) Result {
+	idx := -1
+	for i, c := range res.Columns {
+		if c == column {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		return res
+	}
+
+	counts := map[string]int{}
+	var order []string
+	for _, row := range res.Rows {
+		if idx >= len(row) {
+			continue
+		}
+		key := stringify(row[idx], false)
+		if _, seen := counts[key]; !seen {
+			order = append(order, key)
+		}
+		counts[key]++
+	}
+	sort.Slice(order, func(i, j int) bool { return counts[order[i]] > counts[order[j]] })
+
+	out := Result{Columns: []string{column, "count"}}
+	for _, k := range order {
+		out.Rows = append(out.Rows, []any{k, counts[k]})
+	}
+	return out
 }
 
 func stringify(v any, humanTime bool) string {
