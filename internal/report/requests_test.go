@@ -31,14 +31,14 @@ func TestRequestsUserFilterKeepsFullLifecycle(t *testing.T) {
 		t.Fatalf("got %d rows, want 1", len(res.Rows))
 	}
 	row := res.Rows[0]
-	// Columns: request_id, user, roles, created, state, reviewers, time_to_decision
-	if state := row[4]; state != "APPROVED" {
+	// Columns: request_id, user, roles, reason, created, state, reviewers, time_to_decision
+	if state := row[5]; state != "APPROVED" {
 		t.Errorf("state = %v, want APPROVED (filtering by requester must not lose the reviewer's event)", state)
 	}
-	if reviewers := row[5]; reviewers != "approver@example.com" {
+	if reviewers := row[6]; reviewers != "approver@example.com" {
 		t.Errorf("reviewers = %v, want approver@example.com", reviewers)
 	}
-	if ttd := row[6]; ttd != "15s" {
+	if ttd := row[7]; ttd != "15s" {
 		t.Errorf("time_to_decision = %v, want 15s", ttd)
 	}
 }

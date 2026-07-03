@@ -9,6 +9,13 @@ import (
 	"github.com/tenaciousdlg/teleport-audit-report/internal/format"
 )
 
+// requestEventTypes are the access_request.* lifecycle events, verified
+// against gravitational/teleport's lib/events/api.go:206-214 and
+// https://goteleport.com/docs/reference/audit-events/ (create/update/review
+// documented there; expire/delete confirmed as real constants in source but
+// not independently found in the docs page). access_request.search is
+// deliberately excluded — it's emitted for resource-search UI queries, not
+// a lifecycle transition, and would just be noise here.
 var requestEventTypes = []string{
 	"access_request.create",
 	"access_request.review",
@@ -20,6 +27,7 @@ var requestEventTypes = []string{
 type requestAgg struct {
 	user      string
 	roles     string
+	reason    string
 	created   time.Time
 	state     string
 	reviewers []string
@@ -71,6 +79,7 @@ func aggregateRequests(rows []EventRow) ([]string, map[string]*requestAgg) {
 		case "access_request.create":
 			agg.user = e.User
 			agg.roles = rawField(e.Raw, "roles")
+			agg.reason = rawField(e.Raw, "reason")
 			agg.created = e.Time
 			if s := rawField(e.Raw, "state"); s != "" {
 				agg.state = s
@@ -110,7 +119,7 @@ func aggregateRequests(rows []EventRow) ([]string, map[string]*requestAgg) {
 // buildRequestsResult filters the aggregated requests by requester (if set)
 // and renders them into the report's tabular shape.
 func buildRequestsResult(order []string, byID map[string]*requestAgg, requester string) format.Result {
-	res := format.Result{Columns: []string{"request_id", "user", "roles", "created", "state", "reviewers", "time_to_decision"}}
+	res := format.Result{Columns: []string{"request_id", "user", "roles", "reason", "created", "state", "reviewers", "time_to_decision"}}
 	for _, id := range order {
 		agg := byID[id]
 		if requester != "" && agg.user != requester {
@@ -120,7 +129,7 @@ func buildRequestsResult(order []string, byID map[string]*requestAgg, requester 
 		if agg.decided != nil && !agg.created.IsZero() {
 			ttd = agg.decided.Sub(agg.created).String()
 		}
-		res.Rows = append(res.Rows, []any{id, agg.user, agg.roles, agg.created, agg.state, strings.Join(agg.reviewers, ","), ttd})
+		res.Rows = append(res.Rows, []any{id, agg.user, agg.roles, agg.reason, agg.created, agg.state, strings.Join(agg.reviewers, ","), ttd})
 	}
 	return res
 }

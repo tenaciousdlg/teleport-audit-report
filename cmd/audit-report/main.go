@@ -92,7 +92,8 @@ Examples:
 Requires: the ingestion pipeline (postgres, tbot, event-handler, audit-sink)
 running via Docker Compose, and DATABASE_URL pointing at it — see this
 repo's README.md for setup. Run 'audit-report <command> -h' for
-command-specific flag details.
+command-specific flag details, or see REPORTS.md for what Teleport audit
+event types feed each report and why you'd use one over another.
 `)
 }
 

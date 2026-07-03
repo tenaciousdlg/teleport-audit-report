@@ -87,17 +87,18 @@ func rawField(raw json.RawMessage, key string) string {
 	return string(b)
 }
 
-// rawDuration best-effort computes a session duration from a session.end
-// -style event: either a numeric `duration` field (nanoseconds, used by
-// recent Teleport versions) or the gap between `session_start`/`session_stop`
-// timestamps. Returns "" if neither is present/parseable.
+// rawDuration computes a session duration from the gap between a
+// session.end-style event's `session_start`/`session_stop` timestamps.
+// There is no native numeric duration field: confirmed against
+// api/proto/teleport/legacy/types/events/events.proto in
+// gravitational/teleport, where SessionEnd, DatabaseSessionEnd, and
+// WindowsDesktopSessionEnd all carry only these two RFC3339 timestamps.
+// Returns "" if either field is missing or unparseable (e.g. for event
+// types that don't carry them at all — see sessionEndTypesWithDuration).
 func rawDuration(raw json.RawMessage) string {
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return ""
-	}
-	if d, ok := m["duration"].(float64); ok {
-		return time.Duration(int64(d)).String()
 	}
 	start, sOk := m["session_start"].(string)
 	stop, eOk := m["session_stop"].(string)

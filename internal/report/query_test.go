@@ -31,7 +31,6 @@ func TestRawDuration(t *testing.T) {
 		raw  string
 		want string
 	}{
-		{"numeric duration field (nanoseconds)", `{"duration":5000000000}`, "5s"},
 		{
 			"session_start/session_stop gap",
 			`{"session_start":"2026-07-03T00:00:00Z","session_stop":"2026-07-03T00:01:30Z"}`,
@@ -41,6 +40,7 @@ func TestRawDuration(t *testing.T) {
 		{"only session_start present", `{"session_start":"2026-07-03T00:00:00Z"}`, ""},
 		{"unparseable timestamps", `{"session_start":"not-a-time","session_stop":"also-not"}`, ""},
 		{"invalid json", `not json`, ""},
+		{"numeric duration field is not a recognized shape (verified none of the session-end event types have one)", `{"duration":5000000000}`, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

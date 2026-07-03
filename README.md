@@ -101,6 +101,11 @@ No prebuilt binary yet, or want to build from source instead? Skip the
 
 ## Running reports
 
+See [REPORTS.md](REPORTS.md) for what each report actually covers, which
+Teleport audit event types feed it, and why you'd reach for one over
+another (including `--watch`) — every claim there is cited against
+Teleport's own source and docs, not assumed.
+
 `audit-report` connects to Postgres on `localhost:5432` (published by
 Compose). It reads `DATABASE_URL` from your environment (or pass `--db`
 directly), so source `.env` first:
