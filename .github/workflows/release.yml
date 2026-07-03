@@ -4,11 +4,12 @@
 # formula to tenaciousdlg/homebrew-tap, triggered by pushing a `v*` tag
 # (see .goreleaser.yaml for what actually gets built).
 #
-# REQUIRED SECRET: HOMEBREW_TAP_GITHUB_TOKEN — a fine-grained personal
-# access token scoped to Contents: read/write on tenaciousdlg/homebrew-tap
-# only. The default GITHUB_TOKEN can't push there since it's a different
-# repo. Create one at https://github.com/settings/tokens and add it under
-# this repo's Settings → Secrets and variables → Actions.
+# REQUIRED SECRET: HOMEBREW_TAP_DEPLOY_KEY — an unencrypted SSH private key
+# whose matching public key is added as a write-enabled deploy key on
+# tenaciousdlg/homebrew-tap only (Settings → Deploy keys on that repo,
+# "Allow write access" checked). This pushes over plain git+SSH, not the
+# GitHub API — no token needed, and the key can't touch anything on the
+# account except that one repo's git contents.
 
 name: Release
 
@@ -32,6 +33,11 @@ jobs:
         with:
           go-version: "1.25"
 
+      - name: Write homebrew-tap deploy key
+        run: |
+          install -m 600 /dev/null "$RUNNER_TEMP/tap_deploy_key"
+          printf '%s\n' "${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}" > "$RUNNER_TEMP/tap_deploy_key"
+
       - uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
@@ -39,4 +45,4 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          HOMEBREW_TAP_DEPLOY_KEY_PATH: ${{ runner.temp }}/tap_deploy_key

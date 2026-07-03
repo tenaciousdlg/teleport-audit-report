@@ -43,7 +43,12 @@ brews:
     repository:
       owner: tenaciousdlg
       name: homebrew-tap
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      # Plain git+SSH push via a deploy key scoped to only this repo, not
+      # the GitHub API — no token needed. The deploy key has write access
+      # to homebrew-tap only, nothing else on the account.
+      git:
+        url: "ssh://git@github.com/tenaciousdlg/homebrew-tap.git"
+        private_key: "{{ .Env.HOMEBREW_TAP_DEPLOY_KEY_PATH }}"
     directory: Formula
     homepage: "https://github.com/tenaciousdlg/teleport-audit-report"
     description: "Audit reporting CLI for a Teleport cluster (activity, requests, security, compliance)"

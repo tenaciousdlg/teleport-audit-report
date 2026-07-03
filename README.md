@@ -159,12 +159,23 @@ Pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs
 cross-platform `audit-report` binaries, attach them to a GitHub Release, and
 publish a formula to `tenaciousdlg/homebrew-tap`.
 
-One-time setup required before the first release will fully succeed: create
-a fine-grained GitHub personal access token scoped to `Contents: read/write`
-on `tenaciousdlg/homebrew-tap` only, then add it as this repo's
-`HOMEBREW_TAP_GITHUB_TOKEN` secret (Settings → Secrets and variables →
-Actions). The default `GITHUB_TOKEN` can't push there since it's a
-different repo.
+The tap push authenticates over plain git+SSH with a deploy key, not the
+GitHub API — the default `GITHUB_TOKEN` can't push to a different repo, and
+this avoids a broader-scoped PAT sitting in a secret. One-time setup (done
+as of 2026-07-03, documented here for when the key needs rotating):
+
+1. Generate an unencrypted keypair: `ssh-keygen -t ed25519 -N "" -f tap_deploy_key`.
+2. Add the **public** key as a deploy key on `tenaciousdlg/homebrew-tap`
+   with write access: `gh repo deploy-key add tap_deploy_key.pub --repo
+   tenaciousdlg/homebrew-tap --title "release-ci" --allow-write`.
+3. Store the **private** key as this repo's `HOMEBREW_TAP_DEPLOY_KEY`
+   secret: `gh secret set HOMEBREW_TAP_DEPLOY_KEY --repo
+   tenaciousdlg/teleport-audit-report < tap_deploy_key`.
+4. Delete the local keypair — nothing about it needs to persist outside
+   the deploy key (public) and the Actions secret (private).
+
+This key can only push to `homebrew-tap`'s git contents — it has no
+GitHub API access and can't touch any other repo.
 
 ## Known gotchas (from Teleport's own docs on this plugin)
 
